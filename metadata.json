@@ -1,0 +1,6 @@
+{
+  "name": "Social Properties",
+  "description": "बोकारो और गिरिडीह का हाइपरलोकल रियल एस्टेट सोशल नेटवर्क। AI-संचालित प्रॉपर्टी विवरण और रियल-टाइम चैट के साथ।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

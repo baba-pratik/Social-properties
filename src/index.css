@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+html, body, #root {
+  overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+}
+
+@layer utilities {
+  .scrollbar-hide, .no-scrollbar {
+    /* IE and Edge */
+    -ms-overflow-style: none;
+    /* Firefox */
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.8s infinite;
+}
