@@ -91,12 +91,6 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     }
   };
 
-  const previewAvatar =
-    formData.avatar_url ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(
-      formData.full_name || "User"
-    )}&background=10b981&color=fff`;
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
       <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
@@ -120,11 +114,17 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
           <form id="edit-profile-form" onSubmit={handleSave} className="space-y-4">
             {/* Avatar Preview & Upload */}
-            <div className="flex flex-col items-center justify-center mb-4">
-              <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                <div className="w-24 h-24 rounded-full bg-slate-200 border-4 border-emerald-100 shadow-md overflow-hidden relative">
-                  <img src={previewAvatar} alt="Profile Preview" className="w-full h-full object-cover" />
-                  {isUploadingAvatar && (
+<div className="flex flex-col items-center justify-center mb-4">
+            <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+              <div className="w-24 h-24 rounded-full bg-slate-200 border-4 border-emerald-100 shadow-md overflow-hidden relative">
+                {formData.avatar_url ? (
+                  <img src={formData.avatar_url} alt="Profile Preview" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-3xl">
+                    {formData.full_name?.charAt(0) || "U"}
+                  </div>
+                )}
+                {isUploadingAvatar && (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                       <Loader2 className="w-6 h-6 text-white animate-spin" />
                     </div>

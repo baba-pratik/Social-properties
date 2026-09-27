@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Info, FileText, Shield, HelpCircle, LogOut, LogIn, User, Home, Search, Film } from 'lucide-react';
 import { Profile } from '../types/database';
-import { supabase } from '../lib/supabase';
+import { getSupabaseClient } from '../lib/supabase';
 import { useUserStore } from '../store/useUserStore';
 
 interface HamburgerDrawerProps {
@@ -24,7 +24,8 @@ export const HamburgerDrawer: React.FC<HamburgerDrawerProps> = ({
   const { setSessionUser, setCurrentUser } = useUserStore();
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    const c = getSupabaseClient();
+    if (c) await c.auth.signOut();
     setSessionUser(null);
     setCurrentUser(null);
     onClose();
@@ -73,7 +74,9 @@ export const HamburgerDrawer: React.FC<HamburgerDrawerProps> = ({
             {currentUser?.avatar_url ? (
               <img src={currentUser.avatar_url} alt="Profile" className="w-full h-full object-cover" />
             ) : (
-              <User className="w-7 h-7 text-indigo-600" />
+              <div className="w-full h-full rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xl">
+                {currentUser?.full_name?.charAt(0) || "U"}
+              </div>
             )}
           </div>
           <div className="flex-1 min-w-0">

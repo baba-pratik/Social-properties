@@ -9,7 +9,7 @@ import {
   Info,
   X,
 } from "lucide-react";
-import { Property, Profile, PropertyFilterState, CommunityPost, PropertyStatus } from "./types/database";
+import { Property, Profile, PropertyFilterState, CommunityPost, PropertyStatus, Reel, Notification } from "./types/database";
 import {
   fetchProperties,
   fetchCommunityPosts,
@@ -20,7 +20,18 @@ import {
   deleteProperty,
   isSupabaseConfigured,
   saveUserProfile,
-  supabase
+  getSupabaseClient,
+  getSavedReelIds,
+  fetchSavedReels,
+  fetchReels,
+  fetchNotifications,
+  getUnreadNotificationCount,
+  markNotificationRead,
+  markAllNotificationsRead,
+  updateCommunityPost,
+  deleteCommunityPost,
+  updateReelStatus,
+  deleteReel
 } from "./lib/supabase";
 import { getOrCreateConversation } from "./lib/supabase";
 import { Header } from "./components/Header";
@@ -28,6 +39,7 @@ import { BottomNav } from "./components/BottomNav";
 import { DesktopSidebar } from "./components/DesktopSidebar";
 import { PropertyCard } from "./components/PropertyCard";
 import { CommunityPostCard } from "./components/CommunityPostCard";
+import { CreateCommunityPostModal } from "./components/CreateCommunityPostModal";
 import { ProfileView } from "./components/ProfileView";
 import { PublicProfileView } from "./components/PublicProfileView";
 import { PropertyDetailModal } from "./components/PropertyDetailModal";
@@ -35,6 +47,8 @@ import { PropertyMap } from "./components/PropertyMap";
 import { UploadPropertyForm } from "./components/UploadPropertyForm";
 import { SearchFilters } from "./components/SearchFilters";
 import { ReelsFeed } from "./components/ReelsFeed";
+import { ReelCard } from "./components/ReelCard";
+import { ReelEditModal } from "./components/ReelEditModal";
 import { RealtimeChat } from "./components/RealtimeChat";
 import { AuthModal } from "./components/AuthModal";
 import { SupabaseConfigModal } from "./components/SupabaseConfigModal";
@@ -44,6 +58,8 @@ import { AboutModal } from "./components/AboutModal";
 import { HamburgerDrawer } from "./components/HamburgerDrawer";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { useUserStore } from "./store/useUserStore";
+import { EntryAnimation } from "./components/EntryAnimation";
+import { CreatePostSheet } from "./components/CreatePostSheet";
 
 const RightSidebarContent = ({ setAboutModalSection, setAboutModalOpen }: any) => {
   return (
@@ -66,6 +82,17 @@ export default function App() {
   const { sessionUser, setSessionUser, currentUser, setCurrentUser, authModalOpen, setAuthModalOpen } = useUserStore();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [entryDone, setEntryDone] = useState(false);
+  const [headerCompact, setHeaderCompact] = useState(false);
+
+  // Header compact on scroll
+  useEffect(() => {
+    const handleScroll = () => {
+      setHeaderCompact(window.scrollY > 10);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Initialize Zustand store on first load using Supabase Auth
   useEffect(() => {
@@ -73,7 +100,9 @@ export default function App() {
       if (user) {
         setSessionUser(user);
         try {
-          const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+          const c = getSupabaseClient();
+          if (!c) return;
+          const { data, error } = await c.from("profiles").select("*").eq("id", user.id).single();
           if (data && data.full_name) {
             const meta = user.user_metadata || {};
             const merged: Profile = {
@@ -132,12 +161,16 @@ export default function App() {
     };
 
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const c = getSupabaseClient();
+      if (!c) return;
+      const { data: { session } } = await c.auth.getSession();
       handleAuthChange(session?.user || null);
     };
     checkUser();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const c = getSupabaseClient();
+    if (!c) return;
+    const { data: { subscription } } = c.auth.onAuthStateChange((_event, session) => {
       handleAuthChange(session?.user || null);
     });
 
@@ -147,8 +180,9 @@ export default function App() {
 
   }, [setCurrentUser, setSessionUser]);
 
-  const [activeTab, setActiveTab] = useState<"feed" | "reels" | "search" | "upload" | "messages" | "saved" | "profile" | "public-profile">("feed");
-  const [currentCity, setCurrentCity] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState<"community" | "reels" | "feed" | "messages" | "search" | "profile" | "public-profile">("community");
+  const [communitySubTab, setCommunitySubTab] = useState<"property" | "discussion">("discussion");
+  const [currentCity, setCurrentCity] = useState<string>("सभी");
   
   const [properties, setProperties] = useState<Property[]>([]);
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
@@ -157,16 +191,34 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [savedPropertyIds, setSavedPropertyIds] = useState<string[]>([]);
+  const [savedReelIds, setSavedReelIds] = useState<string[]>([]);
+  const [savedReels, setSavedReels] = useState<Reel[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Search pagination state
+  const [searchResults, setSearchResults] = useState<Property[]>([]);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchHasMore, setSearchHasMore] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+
+  // Create post sheet
+  const [createPostSheetOpen, setCreatePostSheetOpen] = useState(false);
+  const [reelEditModalOpen, setReelEditModalOpen] = useState(false);
+  const [reelToEdit, setReelToEdit] = useState<Reel | null>(null);
 
   // Modals & Active selections
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [editingProperty, setEditingProperty] = useState<Property | null>(null);
+  const [editingCommunityPost, setEditingCommunityPost] = useState<CommunityPost | null>(null);
   const [supabaseModalOpen, setSupabaseModalOpen] = useState(false);
   const [aboutModalOpen, setAboutModalOpen] = useState(false);
   const [aboutModalSection, setAboutModalSection] = useState<"about" | "help" | "privacy" | "terms" | "locations" | "language">("about");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [publicProfileId, setPublicProfileId] = useState<string | null>(null);
   const [isSupabaseActive, setIsSupabaseActive] = useState(isSupabaseConfigured());
+  const [createPostModalOpen, setCreatePostModalOpen] = useState(false);
 
   // Confirm Modal state for Close/Reopen/Delete operations
   const [confirmModalState, setConfirmModalState] = useState<{
@@ -206,12 +258,31 @@ export default function App() {
           setPublicProfileId(id);
           setActiveTab('public-profile' as any);
         }
+      } else if (href.startsWith('/property/')) {
+        const id = href.replace('/property/', '');
+        // Load property if not already in list; assume it will be fetched via feed or search.
+        // For now, switch to feed tab and set selectedProperty when it appears.
+        handleTabChange('feed');
+        // We'll try to find in existing properties; if not, could fetch but skip for now.
+        const prop = properties.find(p => p.id === id);
+        if (prop) setSelectedProperty(prop);
+      } else if (href.startsWith('/reel/')) {
+        const id = href.replace('/reel/', '');
+        handleTabChange('reels');
+        // Try to find in feed items (properties include reels? feed loads reels via ReelsFeed separate)
+        // For simplicity, we could store reels globally, but not present. We'll just switch tab.
+        // The ReelsFeed will load and user can scroll.
+      } else if (href.startsWith('/messages/')) {
+        const id = href.replace('/messages/', '');
+        // Open chat conversation
+        setActiveConversationId(id);
+        handleTabChange('messages');
       }
     };
     
     window.addEventListener('navigate' as any, handleNavigate);
     return () => window.removeEventListener('navigate' as any, handleNavigate);
-  }, [currentUser]);
+  }, [currentUser, properties]);
 
   // Search & Filter State
   const [filters, setFilters] = useState<PropertyFilterState>({
@@ -226,8 +297,17 @@ export default function App() {
     sort_by: "newest",
   });
 
+  const setFiltersAndSearch = (newFilters: PropertyFilterState) => {
+    setFilters(newFilters);
+    // Reset search pagination and load first page
+    setSearchPage(1);
+    setSearchHasMore(true);
+    loadSearchResults(1, true);
+  };
+
   const handleTabChange = (tab: any) => {
-    if (["upload", "messages", "profile", "saved"].includes(tab) && !currentUser) {
+    // Tabs that require authentication
+    if (["messages", "profile", "saved"].includes(tab) && !currentUser) {
       setAuthModalOpen(true);
       return;
     }
@@ -238,7 +318,7 @@ export default function App() {
   // Sync city between Header switcher and filter state
   const handleHeaderCityChange = (city: string) => {
     setCurrentCity(city);
-    setFilters((prev) => ({ ...prev, city, locality: "" }));
+    setFiltersAndSearch({ ...filters, city, locality: "" });
   };
 
   // Load properties and saved items
@@ -271,6 +351,93 @@ export default function App() {
       window.removeEventListener("social-properties-realtime", handleRealtime);
     };
   }, []);
+
+  // Load saved reels for current user
+  useEffect(() => {
+    if (currentUser) {
+      getSavedReelIds(currentUser.id).then(setSavedReelIds);
+      fetchSavedReels(currentUser.id).then(setSavedReels);
+    } else {
+      setSavedReelIds([]);
+      setSavedReels([]);
+    }
+  }, [currentUser]);
+
+  // Realtime handling for saved reels
+  useEffect(() => {
+    const handleReelRealtime = (e: any) => {
+      const { type, reelId } = e.detail || {};
+      if (type === "saved-reel-added" && reelId) {
+        setSavedReelIds((prev) => (prev.includes(reelId) ? prev : [...prev, reelId]));
+        // fetch the reel to add to list
+        fetchReels(1, 1).then((reels) => {
+          const found = reels.find((r) => r.id === reelId);
+          if (found) setSavedReels((prev) => (prev.some((r) => r.id === reelId) ? prev : [found, ...prev]));
+        });
+      } else if (type === "saved-reel-removed" && reelId) {
+        setSavedReelIds((prev) => prev.filter((id) => id !== reelId));
+        setSavedReels((prev) => prev.filter((r) => r.id !== reelId));
+      }
+    };
+    window.addEventListener("social-properties-realtime", handleReelRealtime);
+    return () => window.removeEventListener("social-properties-realtime", handleReelRealtime);
+  }, []);
+
+  // Load notifications and unread count
+  useEffect(() => {
+    if (!currentUser) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+    const load = async () => {
+      const [notifs, unread] = await Promise.all([
+        fetchNotifications(currentUser.id, 30),
+        getUnreadNotificationCount(currentUser.id),
+      ]);
+      setNotifications(notifs);
+      setUnreadCount(unread);
+    };
+    load();
+
+    // Realtime subscription for notifications
+    const c = getSupabaseClient();
+    if (c) {
+      const channel = c.channel(`notifications-${currentUser.id}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${currentUser.id}` },
+          (payload) => {
+            const newNotif = payload.new as Notification;
+            setNotifications((prev) => [newNotif, ...prev]);
+            setUnreadCount((prev) => prev + 1);
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "notifications", filter: `user_id=eq.${currentUser.id}` },
+          (payload) => {
+            const updated = payload.new as Notification;
+            setNotifications((prev) => {
+              const next = prev.map((n) => (n.id === updated.id ? updated : n));
+              setUnreadCount(next.filter((n) => !n.is_read).length);
+              return next;
+            });
+          }
+        )
+        .subscribe();
+      return () => {
+        c.removeChannel(channel);
+      };
+    }
+  }, [currentUser]);
+
+  // Load initial search results when search tab becomes active
+  useEffect(() => {
+    if (activeTab === "search" && searchResults.length === 0 && !searchLoading) {
+      loadSearchResults(1, true);
+    }
+  }, [activeTab, searchResults.length, searchLoading]);
 
   const loadAllData = async (isManual = false) => {
     setLoadingProperties(true);
@@ -315,6 +482,38 @@ export default function App() {
       console.error("Load more error:", err);
     } finally {
       setLoadingMore(false);
+    }
+  };
+
+  // Load search results with server-side filters & pagination
+  const loadSearchResults = async (pageNum: number = 1, reset: boolean = false) => {
+    if (searchLoading && pageNum === 1) return;
+    if (pageNum === 1) setSearchLoading(true);
+    else setSearchLoadingMore(true);
+    try {
+      // Map UI filter values to DB-compatible values
+      const dbFilters: PropertyFilterState = { ...filters };
+      // Map "lease" to "rent" for listing_type (DB only has rent/sale)
+      if (dbFilters.listing_type === "lease") dbFilters.listing_type = "rent";
+      // Remove unsupported UI-only fields for server query
+      // min_area, max_area, verified_only are not supported server-side yet; they will be ignored.
+      const list = await fetchProperties(pageNum, 10, dbFilters);
+      if (reset || pageNum === 1) {
+        setSearchResults(list);
+      } else {
+        setSearchResults((prev) => {
+          const combined = [...prev, ...list];
+          return Array.from(new Map(combined.map(item => [item.id, item])).values());
+        });
+      }
+      setSearchHasMore(list.length === 10);
+      setSearchPage(pageNum);
+    } catch (err) {
+      console.error("Search load error:", err);
+      setSearchHasMore(false);
+    } finally {
+      setSearchLoading(false);
+      setSearchLoadingMore(false);
     }
   };
 
@@ -376,43 +575,136 @@ export default function App() {
     });
   };
 
+  // Reel action handlers
+  const handleRequestCloseReel = (reel: Reel) => {
+    setConfirmModalState({
+      isOpen: true,
+      type: "close",
+      property: reel,
+      isLoading: false,
+    });
+  };
+
+  const handleRequestReopenReel = (reel: Reel) => {
+    setConfirmModalState({
+      isOpen: true,
+      type: "reopen",
+      property: reel,
+      isLoading: false,
+    });
+  };
+
+  const handleRequestDeleteReel = (reel: Reel) => {
+    setConfirmModalState({
+      isOpen: true,
+      type: "delete",
+      property: reel,
+      isLoading: false,
+    });
+  };
+
+  const handleEditReel = (reel: Reel) => {
+    setReelToEdit(reel);
+    setReelEditModalOpen(true);
+  };
+
+  const handleOpenAbout = () => {
+    setAboutModalSection("about");
+    setAboutModalOpen(true);
+  };
+
+  const handleLogout = async () => {
+    const c = getSupabaseClient();
+    if (c) {
+      await c.auth.signOut();
+    }
+    setSessionUser(null);
+    setCurrentUser(null);
+    setActiveTab("community");
+  };
+
   // Execute Confirmed Modal Action (Close / Reopen / Delete)
   const handleExecuteConfirmAction = async () => {
     const { type, property } = confirmModalState;
     if (!property) return;
     const effectiveUserId = currentUser ? currentUser.id : property.author_id;
+    const isReel = "duration_sec" in property;
 
     setConfirmModalState((prev) => ({ ...prev, isLoading: true }));
 
     try {
       if (type === "close") {
-        const updated = await updatePropertyStatus(property.id, "closed", effectiveUserId);
-        setProperties((prev) => prev.map((p) => (p.id === property.id ? updated : p)));
-        if (selectedProperty?.id === property.id) {
-          setSelectedProperty(updated);
+        if (isReel) {
+          const updated = await updateReelStatus(property.id, "archived", effectiveUserId);
+          showToast("रील सफलतापूर्वक बंद कर दी गई है। यह पब्लिक फीड में नहीं दिखेगी।", "success");
+        } else {
+          const updated = await updatePropertyStatus(property.id, "closed", effectiveUserId);
+          setProperties((prev) => prev.map((p) => (p.id === property.id ? updated : p)));
+          if (selectedProperty?.id === property.id) {
+            setSelectedProperty(updated);
+          }
+          showToast("प्रॉपर्टी लिस्टिंग सफलतापूर्वक बंद कर दी गई है। यह पब्लिक फीड में नहीं दिखेगी।", "success");
         }
-        showToast("प्रॉपर्टी लिस्टिंग सफलतापूर्वक बंद कर दी गई है। यह पब्लिक फीड में नहीं दिखेगी।", "success");
       } else if (type === "reopen") {
-        const updated = await updatePropertyStatus(property.id, "active", effectiveUserId);
-        setProperties((prev) => prev.map((p) => (p.id === property.id ? updated : p)));
-        if (selectedProperty?.id === property.id) {
-          setSelectedProperty(updated);
+        if (isReel) {
+          const updated = await updateReelStatus(property.id, "active", effectiveUserId);
+          showToast("रील फिर से सक्रिय कर दी गई है और फीड में दिखाई देगी।", "success");
+        } else {
+          const updated = await updatePropertyStatus(property.id, "active", effectiveUserId);
+          setProperties((prev) => prev.map((p) => (p.id === property.id ? updated : p)));
+          if (selectedProperty?.id === property.id) {
+            setSelectedProperty(updated);
+          }
+          showToast("प्रॉपर्टी फिर से सक्रिय कर दी गई है और फीड में दिखाई देगी।", "success");
         }
-        showToast("प्रॉपर्टी फिर से सक्रिय कर दी गई है और फीड में दिखाई देगी।", "success");
       } else if (type === "delete") {
-        await deleteProperty(property.id, effectiveUserId);
-        setProperties((prev) => prev.filter((p) => p.id !== property.id));
-        setSavedPropertyIds((prev) => prev.filter((id) => id !== property.id));
-        if (selectedProperty?.id === property.id) {
-          setSelectedProperty(null);
+        if (isReel) {
+          const result = await deleteReel(property.id, effectiveUserId);
+          if (!result.success) throw new Error(result.error);
+          showToast("रील और मीडिया फाइलें सफलतापूर्वक हटा दी गईं।", "success");
+        } else {
+          await deleteProperty(property.id, effectiveUserId);
+          setProperties((prev) => prev.filter((p) => p.id !== property.id));
+          setSavedPropertyIds((prev) => prev.filter((id) => id !== property.id));
+          if (selectedProperty?.id === property.id) {
+            setSelectedProperty(null);
+          }
+          showToast("प्रॉपर्टी और मीडिया फाइलें सफलतापूर्वक हटा दी गईं।", "success");
         }
-        showToast("प्रॉपर्टी और मीडिया फाइलें सफलतापूर्वक हटा दी गईं।", "success");
       }
       setConfirmModalState({ isOpen: false, type: "close", property: null, isLoading: false });
     } catch (err: any) {
       console.error("Action execution error:", err);
       showToast(err?.message || "कार्रवाई पूरी करने में त्रुटि हुई।", "error");
       setConfirmModalState((prev) => ({ ...prev, isLoading: false }));
+    }
+  };
+
+  // Community Post handlers
+  const handleEditCommunityPost = (post: CommunityPost) => {
+    setEditingCommunityPost(post);
+  };
+
+  const handleDeleteCommunityPost = async (post: CommunityPost) => {
+    if (!currentUser) return;
+    const result = await deleteCommunityPost(post.id, currentUser.id);
+    if (result.success) {
+      setCommunityPosts((prev) => prev.filter((p) => p.id !== post.id));
+      showToast("पोस्ट हटा दी गई।", "success");
+    } else {
+      showToast(result.error || "पोस्ट हटाने में त्रुटि हुई।", "error");
+    }
+  };
+
+  const handleUpdateCommunityPost = async (postId: string, updates: Partial<CommunityPost>) => {
+    if (!currentUser) return;
+    const updated = await updateCommunityPost(postId, currentUser.id, updates);
+    if (updated) {
+      setCommunityPosts((prev) => prev.map((p) => (p.id === postId ? updated : p)));
+      setEditingCommunityPost(null);
+      showToast("पोस्ट अपडेट हो गई।", "success");
+    } else {
+      showToast("पोस्ट अपडेट करने में त्रुटि हुई।", "error");
     }
   };
 
@@ -527,18 +819,30 @@ export default function App() {
       sort_by: "newest",
     });
     setCurrentCity("all");
+    // Reset search pagination & results
+    setSearchResults([]);
+    setSearchPage(1);
+    setSearchHasMore(true);
+    loadSearchResults(1, true);
   };
 
+  const mainContainerClass = `min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased w-full max-w-full ${
+    activeTab === "reels" ? "h-[100dvh] overflow-hidden" : "overflow-x-hidden"
+  }`;
+
   return (
-    <div className={`min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased w-full max-w-full ${
-      activeTab === "reels" ? "h-[100dvh] overflow-hidden" : "overflow-x-hidden"
-    }`}>
+    <div className={mainContainerClass}>
+      {!entryDone && (
+        <EntryAnimation onComplete={() => setEntryDone(true)} />
+      )}
       <DesktopSidebar
         activeTab={activeTab}
         onTabChange={handleTabChange}
         unreadCount={0}
         currentUser={currentUser}
         onOpenAuth={() => setAuthModalOpen(true)}
+        onOpenAbout={handleOpenAbout}
+        onLogout={handleLogout}
       />
 
       <div className={`flex-1 flex flex-col min-w-0 w-full max-w-full md:ml-64 lg:ml-72 ${
@@ -563,14 +867,15 @@ export default function App() {
             onOpenSettings={() => {
               setIsDrawerOpen(true);
             }}
+            compact={headerCompact}
             isSupabaseActive={isSupabaseActive}
-            unreadCount={0}
-            savedCount={savedProperties.length}
+            unreadCount={unreadCount}
+            savedCount={savedProperties.length + savedReels.length}
           />
         )}
 
         <div 
-          className={`flex-1 w-full mx-auto pt-0 ${
+          className={`flex flex-col lg:flex-row flex-1 w-full mx-auto pt-0 ${
             activeTab === "reels" ? "md:pt-0" : "md:pt-6"
           } ${
             activeTab === "messages" || activeTab === "reels"
@@ -578,35 +883,88 @@ export default function App() {
               : "max-w-7xl flex justify-center gap-8 lg:px-8"
           }`}
         >
-          <main className={`w-full min-w-0 ${activeTab === "reels" ? "h-full" : ""}`}>
-        {activeTab === "feed" && (
+          <main className={`flex-1 min-w-0 w-full ${activeTab === "reels" ? "h-full" : ""}`}>
+        {/* ================= COMMUNITY ================= */}
+        {activeTab === "community" && (
           <div className="w-full max-w-lg md:max-w-2xl lg:max-w-3xl mx-auto flex flex-col pb-20 pt-2 sm:pt-4 px-3 sm:px-0">
-            {loadingProperties ? (
-              <div className="w-full">
-                <PropertyGridSkeleton count={3} />
-              </div>
-            ) : filteredProperties.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3 mx-4">
-                <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
-                <h3 className="text-base font-bold text-slate-800">
-                  इस फ़िल्टर में कोई प्रॉपर्टी नहीं मिली
-                </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  कृपया फ़िल्टर बदलें या अपनी नई प्रॉपर्टी अपलोड करें।
-                </p>
+            {/* Horizontal category tabs */}
+            <div
+              className="flex gap-2 overflow-x-auto px-1"
+              role="tablist"
+              style={{
+                position: 'sticky',
+                top: headerCompact ? '48px' : '56px',
+                zIndex: 30,
+                background: 'var(--color-surface)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                borderBottom: '1px solid var(--color-border-glass)',
+                paddingTop: headerCompact ? '4px' : '8px',
+                paddingBottom: headerCompact ? '4px' : '8px',
+              }}
+            >
+              {[
+                { key: "discussion", label: "समुदाय चर्चा" },
+                { key: "property", label: "प्रॉपर्टी" },
+              ].map((tab) => (
                 <button
-                  onClick={handleResetFilters}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-emerald-700 transition-colors"
+                  key={tab.key}
+                  role="tab"
+                  aria-selected={communitySubTab === tab.key}
+                  onClick={() => setCommunitySubTab(tab.key as any)}
+                  className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors whitespace-nowrap min-h-[44px] flex items-center justify-center ${
+                    communitySubTab === tab.key
+                      ? "bg-[var(--color-primary)] text-white shadow-glass"
+                      : "bg-[var(--color-background)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] hover:border-[var(--color-primary)]"
+                  }`}
                 >
-                  सभी संपत्तियां देखें
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Compact composer */}
+            {currentUser && (
+              <div className="mb-3 flex items-center gap-2 px-2 py-1.5 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg">
+                {currentUser.avatar_url ? (
+                  <img src={currentUser.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
+                    <span className="text-[var(--color-primary)] font-bold text-xs">{currentUser.full_name?.charAt(0) || "U"}</span>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <button
+                    onClick={() => setCreatePostSheetOpen(true)}
+                    className="w-full text-left px-2 py-1 bg-transparent text-[var(--color-text-tertiary)] placeholder:text-[var(--color-text-tertiary)] text-xs rounded hover:bg-[var(--color-primary)]/5 transition-colors"
+                  >
+                    क्या नया पोस्ट करना चाहते हैं?
+                  </button>
+                </div>
+                <button
+                  onClick={() => setCreatePostSheetOpen(true)}
+                  className="flex items-center justify-center w-7 h-7 rounded-full bg-[var(--color-primary)] text-white transition-colors hover:bg-[var(--color-primary-dark)]"
+                  aria-label="Create post"
+                >
+                  <span className="text-base">+</span>
                 </button>
               </div>
-            ) : (
-              <div className="flex flex-col gap-0 sm:gap-6 pb-20 sm:pb-0">
-                {feedItems.map((item, idx) => {
-                  if (item.type === 'property') {
-                    const property = item.data;
-                    return (
+            )}
+
+            {/* Community sub-tab content */}
+            {communitySubTab === "property" && (
+              <>
+                {loadingProperties ? (
+                  <div className="w-full"><PropertyGridSkeleton count={3} /></div>
+                ) : filteredProperties.length === 0 ? (
+                  <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3 mx-4">
+                    <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
+                    <h3 className="text-base font-bold text-slate-800">इस फ़िल्टर में कोई प्रॉपर्टी नहीं</h3>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">फ़िल्टर बदलें या नई प्रॉपर्टी अपलोड करें।</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-6">
+                    {filteredProperties.map((property) => (
                       <div key={`prop-${property.id}`}>
                         <PropertyCard
                            property={property}
@@ -622,40 +980,54 @@ export default function App() {
                            onDeleteListing={handleRequestDeleteProperty}
                         />
                       </div>
-                    );
-                  } else {
-                    const post = item.data;
-                    return (
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {communitySubTab === "reels" && (
+              <ReelsFeed
+                currentUser={currentUser}
+                onSelectProperty={(prop) => setSelectedProperty(prop)}
+                onStartChat={handleStartChat}
+                onToggleSave={handleToggleSave}
+                savedPropertyIds={savedPropertyIds}
+                onEdit={handleEditReel}
+                onCloseListing={handleRequestCloseReel}
+                onReopenListing={handleRequestReopenReel}
+                onDeleteListing={handleRequestDeleteReel}
+              />
+            )}
+
+            {communitySubTab === "discussion" && (
+              <>
+                {loadingProperties ? (
+                  <div className="w-full"><PropertyGridSkeleton count={3} /></div>
+                ) : communityPosts.length === 0 ? (
+                  <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3 mx-4">
+                    <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
+                    <h3 className="text-base font-bold text-slate-800">कोई कम्युनिटी पोस्ट नहीं</h3>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">पहली पोस्ट आप बनाएं!</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {communityPosts.map((post) => (
                       <div key={`post-${post.id}`} className="sm:px-0">
                         <CommunityPostCard
                            post={post}
                            currentUser={currentUser}
-                           onComment={() => {
-                             if (!currentUser) {
-                               setAuthModalOpen(true);
-                             }
-                           }}
+                           onComment={() => { if (!currentUser) setAuthModalOpen(true); }}
                            onRequestAuth={() => setAuthModalOpen(true)}
+                           onEdit={handleEditCommunityPost}
+                           onDelete={handleDeleteCommunityPost}
                         />
                       </div>
-                    );
-                  }
-                })}
-                
-                {hasMore && (
-                  <div className="py-8 flex justify-center">
-                    <button
-                      onClick={loadMoreProperties}
-                      disabled={loadingMore}
-                      className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-full text-sm cursor-pointer transition-colors"
-                    >
-                      {loadingMore ? "लोड हो रहा है..." : "और देखें"}
-                    </button>
+                    ))}
                   </div>
                 )}
-              </div>
+              </>
             )}
-            
           </div>
         )}
 
@@ -664,14 +1036,15 @@ export default function App() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-6">
             <SearchFilters
               filters={filters}
-              onFilterChange={(f) => setFilters(f)}
+              onFilterChange={setFiltersAndSearch}
               onReset={handleResetFilters}
-              resultCount={filteredProperties.length}
+              resultCount={searchResults.length}
+              isLoading={searchLoading}
             />
 
-            {loadingProperties ? (
+            {searchLoading ? (
               <PropertyGridSkeleton count={6} />
-            ) : filteredProperties.length === 0 ? (
+            ) : searchResults.length === 0 ? (
               <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3">
                 <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
                 <h3 className="text-base font-bold text-slate-800">
@@ -688,29 +1061,77 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {searchResults.map((property) => (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      isSaved={savedPropertyIds.includes(property.id)}
+                      onToggleSave={handleToggleSave}
+                      onSelectProperty={(prop) => setSelectedProperty(prop)}
+                      onStartChat={handleStartChat}
+                      currentUser={currentUser}
+                      onRequestAuth={() => setAuthModalOpen(true)}
+                      onEdit={handleEditProperty}
+                      onCloseListing={handleRequestCloseProperty}
+                      onReopenListing={handleRequestReopenProperty}
+                      onDeleteListing={handleRequestDeleteProperty}
+                    />
+                  ))}
+                </div>
+                {searchHasMore && (
+                  <div className="py-8 flex justify-center">
+                    <button
+                      onClick={() => loadSearchResults(searchPage + 1)}
+                      disabled={searchLoadingMore}
+                      className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-full text-sm cursor-pointer transition-colors disabled:opacity-50"
+                    >
+                      {searchLoadingMore ? "लोड हो रहा है..." : "और देखें"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ================= TAB: FEED (Property feed) ================= */}
+        {activeTab === "feed" && (
+          <div className="w-full max-w-lg md:max-w-2xl lg:max-w-3xl mx-auto flex flex-col pb-20 pt-2 sm:pt-4 px-3 sm:px-0">
+            {loadingProperties ? (
+              <div className="w-full"><PropertyGridSkeleton count={3} /></div>
+            ) : filteredProperties.length === 0 ? (
+              <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3 mx-4">
+                <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
+                <h3 className="text-base font-bold text-slate-800">इस फ़िल्टर में कोई प्रॉपर्टी नहीं</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">फ़िल्टर बदलें या नई प्रॉपर्टी अपलोड करें।</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-6">
                 {filteredProperties.map((property) => (
-                  <PropertyCard
-                    key={property.id}
-                    property={property}
-                    isSaved={savedPropertyIds.includes(property.id)}
-                    onToggleSave={handleToggleSave}
-                    onSelectProperty={(prop) => setSelectedProperty(prop)}
-                    onStartChat={handleStartChat}
-                    currentUser={currentUser}
-                    onRequestAuth={() => setAuthModalOpen(true)}
-                    onEdit={handleEditProperty}
-                    onCloseListing={handleRequestCloseProperty}
-                    onReopenListing={handleRequestReopenProperty}
-                    onDeleteListing={handleRequestDeleteProperty}
-                  />
+                  <div key={`prop-${property.id}`}>
+                    <PropertyCard
+                       property={property}
+                       isSaved={savedPropertyIds.includes(property.id)}
+                       onToggleSave={handleToggleSave}
+                       onSelectProperty={(prop) => setSelectedProperty(prop)}
+                       onStartChat={handleStartChat}
+                       currentUser={currentUser}
+                       onRequestAuth={() => setAuthModalOpen(true)}
+                       onEdit={handleEditProperty}
+                       onCloseListing={handleRequestCloseProperty}
+                       onReopenListing={handleRequestReopenProperty}
+                       onDeleteListing={handleRequestDeleteProperty}
+                    />
+                  </div>
                 ))}
               </div>
             )}
           </div>
         )}
 
-        {/* ================= TAB 3: UPLOAD ================= */}
+        {/* ================= TAB 3: REELS ================= */}
         {activeTab === "reels" && (
           <ReelsFeed
             currentUser={currentUser}
@@ -718,10 +1139,10 @@ export default function App() {
             onStartChat={handleStartChat}
             onToggleSave={handleToggleSave}
             savedPropertyIds={savedPropertyIds}
-            onEdit={handleEditProperty}
-            onCloseListing={handleRequestCloseProperty}
-            onReopenListing={handleRequestReopenProperty}
-            onDeleteListing={handleRequestDeleteProperty}
+            onEdit={handleEditReel}
+            onCloseListing={handleRequestCloseReel}
+            onReopenListing={handleRequestReopenReel}
+            onDeleteListing={handleRequestDeleteReel}
           />
         )}
 
@@ -776,15 +1197,15 @@ export default function App() {
               <div>
                 <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
                   <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
-                  <span>आपकी पसंदीदा संपत्तियां ({savedProperties.length})</span>
+                  <span>आपकी पसंदीदा संपत्तियां ({savedProperties.length + savedReels.length})</span>
                 </h1>
                 <p className="text-xs text-slate-500">
-                  सहेजी गई प्रॉपर्टीज की त्वरित सूची - सीधे संपर्क करें या विशलिस्ट से हटाएं
+                  सहेजी गई प्रॉपर्टीज और रील्स की त्वरित सूची - सीधे संपर्क करें या विशलिस्ट से हटाएं
                 </p>
               </div>
             </div>
 
-            {savedProperties.length === 0 ? (
+            {(savedProperties.length === 0 && savedReels.length === 0) ? (
               <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 p-8 space-y-3">
                 <Heart className="w-12 h-12 text-slate-300 mx-auto" />
                 <h3 className="text-base font-bold text-slate-800">
@@ -801,26 +1222,53 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                {savedProperties.map((property) => (
-                  <PropertyCard
-                    key={property.id}
-                    property={property}
-                    isSaved={true}
-                    onToggleSave={handleToggleSave}
-                    onSelectProperty={(prop) => setSelectedProperty(prop)}
-                    onStartChat={handleStartChat}
-                    currentUser={currentUser}
-                    onRequestAuth={() => setAuthModalOpen(true)}
-                    showWishlistRemoveButton={true}
-                    onRemoveFromWishlist={handleRemoveFromWishlist}
-                    onEdit={handleEditProperty}
-                    onCloseListing={handleRequestCloseProperty}
-                    onReopenListing={handleRequestReopenProperty}
-                    onDeleteListing={handleRequestDeleteProperty}
-                  />
-                ))}
-              </div>
+              <>
+                {savedProperties.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {savedProperties.map((property) => (
+                      <PropertyCard
+                        key={property.id}
+                        property={property}
+                        isSaved={true}
+                        onToggleSave={handleToggleSave}
+                        onSelectProperty={(prop) => setSelectedProperty(prop)}
+                        onStartChat={handleStartChat}
+                        currentUser={currentUser}
+                        onRequestAuth={() => setAuthModalOpen(true)}
+                        showWishlistRemoveButton={true}
+                        onRemoveFromWishlist={handleRemoveFromWishlist}
+                        onEdit={handleEditProperty}
+                        onCloseListing={handleRequestCloseProperty}
+                        onReopenListing={handleRequestReopenProperty}
+                        onDeleteListing={handleRequestDeleteProperty}
+                      />
+                    ))}
+                  </div>
+                )}
+                {savedReels.length > 0 && (
+                  <div className="space-y-4">
+                    <h2 className="text-sm font-bold text-slate-700">सहेजी गई रील्स</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                      {savedReels.map((reel) => (
+                        <ReelCard
+                          key={reel.id}
+                          property={reel}
+                          currentUser={currentUser}
+                          onSelectProperty={(prop) => setSelectedProperty(prop)}
+                          onStartChat={handleStartChat}
+                          onToggleSave={() => {}}
+                          isSaved={false}
+                          isSavedReel={true}
+                          onEdit={handleEditProperty}
+                          onCloseListing={handleRequestCloseReel}
+                          onReopenListing={handleRequestReopenReel}
+                          onDeleteListing={handleRequestDeleteReel}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -857,9 +1305,22 @@ export default function App() {
         )}
       </main>
 
-      <aside className={`hidden ${activeTab !== "messages" ? "xl:block" : ""} w-[320px] shrink-0 pt-4 space-y-6`}>
-        <RightSidebarContent setAboutModalSection={setAboutModalSection} setAboutModalOpen={setAboutModalOpen} />
-      </aside>
+      {activeTab === "community" && communitySubTab === "property" ? (
+        <aside className="hidden lg:block w-80 border-l border-[var(--color-border)] bg-[var(--color-surface)] p-4 overflow-y-auto">
+          <SearchFilters
+            filters={filters}
+            onFilterChange={setFiltersAndSearch}
+            onReset={handleResetFilters}
+            resultCount={filteredProperties.length}
+            isLoading={loadingProperties}
+          />
+        </aside>
+      ) : (
+        <aside className={`hidden ${activeTab !== "messages" ? "xl:block" : ""} w-[320px] shrink-0 pt-4 space-y-6`}>
+          <RightSidebarContent setAboutModalSection={setAboutModalSection} setAboutModalOpen={setAboutModalOpen} />
+        </aside>
+      )}
+    </div>
     </div>
 
     {activeTab !== "upload" && !authModalOpen && !showOnboarding && (
@@ -961,9 +1422,26 @@ export default function App() {
         onCancel={() => setConfirmModalState((prev) => ({ ...prev, isOpen: false, property: null }))}
       />
 
+      {/* Reel Edit Modal */}
+      {reelEditModalOpen && reelToEdit && (
+        <ReelEditModal
+          reel={reelToEdit}
+          currentUser={currentUser}
+          onClose={() => {
+            setReelEditModalOpen(false);
+            setReelToEdit(null);
+          }}
+          onSuccess={() => {
+            setReelEditModalOpen(false);
+            setReelToEdit(null);
+            // Refresh reels list could be done via realtime or reload; for now rely on realtime.
+          }}
+        />
+      )}
+
       {/* Floating Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-20 md:bottom-8 right-4 md:right-8 z-50 flex items-center gap-3 px-4 py-3 bg-slate-900/95 text-white rounded-2xl shadow-2xl backdrop-blur-md border border-slate-700/50 max-w-md animate-in slide-in-from-bottom-5 duration-200">
+        <div className="fixed bottom-20 md:bottom-8 right-4 md:right-8 z-50 flex items-center gap-3 px-4 py-3 bg-slate-900/95 text-white rounded-2xl shadow-2xl backdrop-blur-md border border-slate-700/50 max-w-md animate-in slide-in-from-bottom-5 duration-200 toast-mobile-safe">
           {toastMessage.type === "success" ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
           ) : toastMessage.type === "error" ? (
@@ -1016,6 +1494,45 @@ export default function App() {
         />
       )}
 
+      {/* Create Post Sheet */}
+      <CreatePostSheet
+        isOpen={createPostSheetOpen}
+        onClose={() => setCreatePostSheetOpen(false)}
+        onSelectOption={(opt) => {
+          if (opt === "property") {
+            handleTabChange("upload"); // could navigate to upload with property mode
+          } else if (opt === "reel") {
+            handleTabChange("upload"); // upload with reel mode
+          } else if (opt === "community") {
+            setCreatePostModalOpen(true);
+          }
+        }}
+        currentUser={currentUser}
+      />
+
+      {/* Create Community Post Modal */}
+      {createPostModalOpen && (
+        <CreateCommunityPostModal
+          onClose={() => setCreatePostModalOpen(false)}
+          onSuccess={() => {
+            setCreatePostModalOpen(false);
+            loadAllData();
+          }}
+        />
+      )}
+
+      {/* Edit Community Post Modal */}
+      {editingCommunityPost && (
+        <CreateCommunityPostModal
+          initialData={editingCommunityPost}
+          onClose={() => setEditingCommunityPost(null)}
+          onSuccess={() => {
+            setEditingCommunityPost(null);
+            loadAllData();
+          }}
+        />
+      )}
+
       {/* Hamburger Drawer */}
       <HamburgerDrawer
         isOpen={isDrawerOpen}
@@ -1028,7 +1545,6 @@ export default function App() {
         }}
         onNavigateTab={handleTabChange}
       />
-      </div>
     </div>
   );
 }

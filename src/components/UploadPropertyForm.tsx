@@ -25,9 +25,9 @@ import {
   Compass,
   Tractor,
 } from "lucide-react";
-import { Profile, ListingType, PropertyType, Property } from "../types/database";
+import { Profile, ListingType, PropertyType, Property, Reel } from "../types/database";
 import { LOCALITIES_BY_CITY, PROPERTY_TYPE_LABELS } from "../lib/utils";
-import { createProperty, updateProperty, uploadPropertyMedia } from "../lib/supabase";
+import { createProperty, updateProperty, uploadPropertyMedia, createReel, uploadReelVideo } from "../lib/supabase";
 
 interface UploadPropertyFormProps {
   initialData?: Property;
@@ -71,6 +71,8 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
       : []
   );
   const [videoUrl, setVideoUrl] = useState<string>(initialData?.video_url || "");
+  const [reelVideoMeta, setReelVideoMeta] = useState<{ width: number; height: number; fileSize: number; duration: number } | null>(null);
+  const [reelUserId, setReelUserId] = useState<string | null>(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -174,11 +176,34 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
         }
 
         let url = "";
-        try {
-          url = await uploadPropertyMedia(file);
-        } catch (uploadErr) {
-          console.warn("uploadPropertyMedia fallback:", uploadErr);
-          url = URL.createObjectURL(file);
+        let videoMeta: { width: number; height: number; fileSize: number; duration: number } | null = null;
+
+        if (uploadType === "reel" && file.type.startsWith("video/")) {
+          // Use dedicated reel upload for videos
+          try {
+            const meta = await uploadReelVideo(file);
+            url = meta.videoUrl;
+            videoMeta = {
+              width: meta.videoWidth,
+              height: meta.videoHeight,
+              fileSize: meta.videoFileSize,
+              duration: meta.durationSec,
+            };
+            // Store metadata for later use in handleSubmit
+            setReelVideoMeta(videoMeta);
+            setReelUserId(meta.userId);
+          } catch (reelUploadErr) {
+            console.error("Reel video upload failed:", reelUploadErr);
+            throw reelUploadErr;
+          }
+        } else {
+          // Use existing property media upload for images
+          try {
+            url = await uploadPropertyMedia(file);
+          } catch (uploadErr) {
+            console.warn("uploadPropertyMedia fallback:", uploadErr);
+            url = URL.createObjectURL(file);
+          }
         }
         setUploadProgress(((i + 1) * 100) / files.length);
 
@@ -208,6 +233,8 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
 
   const handleRemoveVideo = () => {
     setVideoUrl("");
+    setReelVideoMeta(null);
+    setReelUserId(null);
   };
 
   const handleGenerateScript = async () => {
@@ -266,7 +293,7 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
       setErrorMessage("कृपया प्रॉपर्टी का शीर्षक दर्ज करें।");
       return false;
     }
-    if (!price || Number(price) <= 0) {
+    if (uploadType !== "reel" && (!price || Number(price) <= 0)) {
       setErrorMessage("कृपया सही कीमत दर्ज करें।");
       return false;
     }
@@ -293,21 +320,95 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
 
     const actualLocality = locality === "other" ? customLocality.trim() : locality;
     
-    let finalDescription = description.trim();
-    if (isCommercial && suitableBusiness.trim()) {
-      finalDescription += `\n\nउपयुक्त व्यवसाय: ${suitableBusiness.trim()}`;
+    // For Reel: use defaults for hidden fields
+    const isReel = uploadType === "reel";
+
+    if (isReel) {
+      // Reel submission - use dedicated reels table
+      if (!videoUrl) {
+        setErrorMessage("कृपया रील के लिए एक वर्टिकल वीडियो अवश्य अपलोड करें।");
+        setSubmittingForm(false);
+        return;
+      }
+
+      const reelPayload = {
+        title: title.trim(),
+        description: description.trim() || `${title} ${actualLocality}, ${city} में स्थित है।`,
+        video_url: videoUrl,
+        video_width: reelVideoMeta?.width,
+        video_height: reelVideoMeta?.height,
+        video_file_size: reelVideoMeta?.fileSize,
+        duration_sec: reelVideoMeta?.duration,
+        city,
+        locality: actualLocality,
+        landmark: landmark.trim() || undefined,
+        contact_preference: contactPreference,
+        userId: reelUserId || "",
+      };
+
+      try {
+        const created = await createReel(reelPayload);
+        if (created) {
+          // Notify global realtime event
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("social-properties-realtime", {
+                detail: { event: "reel-added", property: created },
+              })
+            );
+          }
+          setFormSuccess(true);
+          setTimeout(() => {
+            // Convert Reel to Property-like object for compatibility with onPropertyCreated
+            const reelAsProperty = {
+              ...created,
+              id: created.id,
+              author_id: created.author_id,
+              author: created.author,
+              title: created.title,
+              description: created.description,
+              price: 0,
+              listing_type: "sale" as const,
+              property_type: "flat" as const,
+              bedrooms: 0,
+              bathrooms: 0,
+              address: created.locality,
+              locality: created.locality,
+              city: created.city,
+              lat: city === "गिरिडीह" ? 24.1852 : 23.6693,
+              lng: city === "गिरिडीह" ? 86.3054 : 86.1511,
+              video_url: created.video_url,
+              media_urls: [created.video_url],
+              status: "active" as const,
+              views_count: created.views_count,
+              likes_count: created.likes_count,
+              comments_count: created.comments_count,
+              created_at: created.created_at,
+              updated_at: created.updated_at,
+            } as Property;
+            onPropertyCreated(reelAsProperty);
+          }, 1200);
+        }
+      } catch (err: any) {
+        console.error("Submit reel error:", err);
+        setErrorMessage(err?.message || "रील सेव करने में त्रुटि हुई। कृपया पुनः प्रयास करें।");
+      } finally {
+        setSubmittingForm(false);
+      }
+      return;
     }
-    if (!finalDescription) {
-      finalDescription = `${title} ${actualLocality}, ${city} में स्थित है। ${
-        listingType === "rent" ? "किराये के लिए उपलब्ध।" : "बिक्री के लिए उपलब्ध।"
-      }`;
-    }
+
+    // Post submission - existing property flow
+    const effectiveListingType = listingType;
+    const effectivePropertyType = propertyType;
+    const effectivePrice = Number(price);
+    const effectiveNegotiable = isNegotiable;
+    const effectiveAddress = address.trim() || actualLocality;
+    const effectiveDescription = description.trim() || 
+      `${title} ${actualLocality}, ${city} में स्थित है।`;
 
     // Ensure fallback images if empty
     let mediaUrlsToSave = uploadedUrls.length > 0 ? uploadedUrls : [];
-    if (uploadType === "reel" && videoUrl && !mediaUrlsToSave.includes(videoUrl)) {
-      mediaUrlsToSave = [videoUrl, ...mediaUrlsToSave];
-    }
     if (mediaUrlsToSave.length === 0) {
       mediaUrlsToSave = [
         "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800&auto=format&fit=crop&q=80",
@@ -317,30 +418,31 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
     const propertyPayload: any = {
       author_id: currentUser.id,
       title: title.trim(),
-      description: finalDescription,
-      price: Number(price),
-      listing_type: listingType,
-      property_type: propertyType,
-      bedrooms: 0, // Safe default
-      bathrooms: 0, // Safe default
-      address: address.trim() || actualLocality,
+      description: effectiveDescription,
+      price: effectivePrice,
+      listing_type: effectiveListingType,
+      property_type: effectivePropertyType,
+      bedrooms: 0,
+      bathrooms: 0,
+      address: effectiveAddress,
       locality: actualLocality,
       city,
       lat: city === "गिरिडीह" ? 24.1852 : 23.6693,
       lng: city === "गिरिडीह" ? 86.3054 : 86.1511,
-      video_url: uploadType === "reel" && videoUrl ? videoUrl : (videoUrl || null),
+      video_url: videoUrl || null,
       media_urls: mediaUrlsToSave,
       status: "active",
-      negotiable: isNegotiable,
+      negotiable: effectiveNegotiable,
       contact_preference: contactPreference,
     };
 
-    // Only set optional details if they are shown and not uploading a reel
-    if (uploadType !== "reel" && showOptionalDetails) {
-      if (landmark.trim()) {
-        propertyPayload.landmark = landmark.trim();
-      }
+    // Set optional details: Landmark for both Post and Reel
+    if (landmark.trim()) {
+      propertyPayload.landmark = landmark.trim();
+    }
 
+    // Only set additional optional details for Post (not Reel)
+    if (showOptionalDetails) {
       if (isResidential) {
         propertyPayload.bedrooms = Number(bedrooms) || 0;
         propertyPayload.bathrooms = Number(bathrooms) || 0;
@@ -383,7 +485,7 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
         if (furnishing) propertyPayload.furnishing = furnishing;
       }
     } else {
-      // Set missing optional fields to null or safe default values
+      // Set missing optional fields to null or safe default values for Post without optional details
       propertyPayload.bedrooms = 0;
       propertyPayload.bathrooms = 0;
       propertyPayload.balconies = null;
@@ -525,7 +627,12 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   <div className="grid grid-cols-2 gap-3 p-1.5 bg-slate-100 rounded-2xl">
                     <button
                       type="button"
-                      onClick={() => setUploadType("post")}
+                      onClick={() => {
+                        setUploadType("post");
+                        setVideoUrl("");
+                        setReelVideoMeta(null);
+                        setReelUserId(null);
+                      }}
                       className={`flex items-center justify-center gap-2.5 py-3.5 px-4 rounded-xl font-bold text-base transition-all ${
                         uploadType === "post"
                           ? "bg-white text-emerald-700 shadow-md scale-[1.01]"
@@ -538,7 +645,12 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setUploadType("reel")}
+                      onClick={() => {
+                        setUploadType("reel");
+                        setUploadedUrls([]);
+                        setReelVideoMeta(null);
+                        setReelUserId(null);
+                      }}
                       className={`flex items-center justify-center gap-2.5 py-3.5 px-4 rounded-xl font-bold text-base transition-all ${
                         uploadType === "reel"
                           ? "bg-white text-emerald-700 shadow-md scale-[1.01]"
@@ -556,65 +668,69 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   </p>
                 </div>
 
-                {/* 2. Listing Type: Rent vs Sale */}
-                <div className="space-y-3">
-                  <label className="block text-sm font-bold text-slate-700">
-                    प्रॉपर्टी का उद्देश्य *
-                  </label>
-                  <div className="flex gap-3">
-                    {[
-                      { id: "sale", label: "बिक्री (Sale)" },
-                      { id: "rent", label: "किराया (Rent)" },
-                    ].map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => setListingType(item.id as ListingType)}
-                        className={`flex-1 py-3 px-4 rounded-xl font-bold text-sm sm:text-base border-2 transition-all ${
-                          listingType === item.id
-                            ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 3. Property Type Selection */}
-                <div className="space-y-3">
-                  <label className="block text-sm font-bold text-slate-700">
-                    प्रॉपर्टी श्रेणी चुनें *
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {[
-                      { id: "flat", label: "फ्लैट / अपार्टमेंट", icon: Building },
-                      { id: "house", label: "स्वतंत्र मकान", icon: Home },
-                      { id: "villa", label: "विला (Villa)", icon: Home },
-                      { id: "land", label: "प्लॉट / आवासीय ज़मीन", icon: MapIcon },
-                      { id: "agricultural_land", label: "कृषि भूमि / खेत", icon: Tractor },
-                      { id: "commercial", label: "कमर्शियल शॉप / ऑफिस", icon: Store },
-                    ].map((t) => {
-                      const Icon = t.icon;
-                      const isSelected = propertyType === t.id;
-                      return (
-                        <div
-                          key={t.id}
-                          onClick={() => setPropertyType(t.id as PropertyType)}
-                          className={`cursor-pointer rounded-2xl p-4 border-2 flex flex-col items-center text-center gap-2 transition-all ${
-                            isSelected
-                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm scale-[1.02]"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-emerald-200 hover:bg-slate-50"
+                {/* 2. Listing Type: Rent vs Sale (Hidden for Reel) */}
+                {uploadType !== "reel" && (
+                  <div className="space-y-3">
+                    <label className="block text-sm font-bold text-slate-700">
+                      प्रॉपर्टी का उद्देश्य *
+                    </label>
+                    <div className="flex gap-3">
+                      {[
+                        { id: "sale", label: "बिक्री (Sale)" },
+                        { id: "rent", label: "किराया (Rent)" },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setListingType(item.id as ListingType)}
+                          className={`flex-1 py-3 px-4 rounded-xl font-bold text-sm sm:text-base border-2 transition-all ${
+                            listingType === item.id
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                           }`}
                         >
-                          <Icon className={`w-7 h-7 ${isSelected ? "text-emerald-600" : "text-slate-400"}`} />
-                          <span className="font-bold text-xs sm:text-sm">{t.label}</span>
-                        </div>
-                      );
-                    })}
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* 3. Property Type Selection (Hidden for Reel) */}
+                {uploadType !== "reel" && (
+                  <div className="space-y-3">
+                    <label className="block text-sm font-bold text-slate-700">
+                      प्रॉपर्टी श्रेणी चुनें *
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {[
+                        { id: "flat", label: "फ्लैट / अपार्टमेंट", icon: Building },
+                        { id: "house", label: "स्वतंत्र मकान", icon: Home },
+                        { id: "villa", label: "विला (Villa)", icon: Home },
+                        { id: "land", label: "प्लॉट / आवासीय ज़मीन", icon: MapIcon },
+                        { id: "agricultural_land", label: "कृषि भूमि / खेत", icon: Tractor },
+                        { id: "commercial", label: "कमर्शियल शॉप / ऑफिस", icon: Store },
+                      ].map((t) => {
+                        const Icon = t.icon;
+                        const isSelected = propertyType === t.id;
+                        return (
+                          <div
+                            key={t.id}
+                            onClick={() => setPropertyType(t.id as PropertyType)}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 flex flex-col items-center text-center gap-2 transition-all ${
+                              isSelected
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm scale-[1.02]"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-emerald-200 hover:bg-slate-50"
+                            }`}
+                          >
+                            <Icon className={`w-7 h-7 ${isSelected ? "text-emerald-600" : "text-slate-400"}`} />
+                            <span className="font-bold text-xs sm:text-sm">{t.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
               </div>
             )}
@@ -747,63 +863,6 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   </div>
                 )}
 
-                {/* AI Script Generator: ONLY IN REEL FLOW */}
-                {uploadType === "reel" && (
-                  <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-3xl p-5 border border-indigo-100 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 shrink-0">
-                        <Sparkles className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-slate-800 text-base">
-                          AI से 30-सेकंड वीडियो स्क्रिप्ट
-                        </h3>
-                        <p className="text-xs text-slate-500">
-                          वीडियो रिकॉर्ड करते समय बोलने के लिए तुरंत हिंदी स्क्रिप्ट बनाएं।
-                        </p>
-                      </div>
-                    </div>
-
-                    {!scriptGenerated ? (
-                      <button
-                        type="button"
-                        onClick={handleGenerateScript}
-                        disabled={isGeneratingScript}
-                        className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
-                      >
-                        {isGeneratingScript ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>AI स्क्रिप्ट लिख रहा है...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="w-4 h-4" />
-                            <span>AI से स्क्रिप्ट जेनरेट करें</span>
-                          </>
-                        )}
-                      </button>
-                    ) : (
-                      <div className="space-y-2">
-                        <textarea
-                          rows={5}
-                          value={videoScript}
-                          onChange={(e) => setVideoScript(e.target.value)}
-                          className="w-full p-3 text-sm bg-white border border-indigo-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleGenerateScript}
-                          disabled={isGeneratingScript}
-                          className="text-xs text-indigo-600 font-bold hover:underline"
-                        >
-                          पुनः जेनरेट करें
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
               </div>
             )}
 
@@ -825,40 +884,42 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   />
                 </div>
 
-                {/* Price & Negotiable */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-1.5">
-                      {listingType === "rent" ? "किराया प्रतिमाह (₹) *" : "कुल कीमत (₹) *"}
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-3.5 text-slate-400 font-bold text-base">₹</span>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        placeholder="0"
-                        min="1"
-                        value={price}
-                        onChange={(e) => setPrice(e.target.value ? Number(e.target.value) : "")}
-                        className="w-full pl-9 pr-4 py-3.5 text-base font-bold border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:outline-none transition-colors"
-                      />
+                {/* Price & Negotiable (Hidden for Reel) */}
+                {uploadType !== "reel" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                        {listingType === "rent" ? "किराया प्रतिमाह (₹) *" : "कुल कीमत (₹) *"}
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3.5 text-slate-400 font-bold text-base">₹</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder="0"
+                          min="1"
+                          value={price}
+                          onChange={(e) => setPrice(e.target.value ? Number(e.target.value) : "")}
+                          className="w-full pl-9 pr-4 py-3.5 text-base font-bold border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:outline-none transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center sm:pt-6">
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={isNegotiable}
+                          onChange={(e) => setIsNegotiable(e.target.checked)}
+                          className="w-5 h-5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                        />
+                        <span className="text-sm font-bold text-slate-700">
+                          कीमत नेगोशिएबल (मोलभाव संभव)
+                        </span>
+                      </label>
                     </div>
                   </div>
-
-                  <div className="flex items-center sm:pt-6">
-                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={isNegotiable}
-                        onChange={(e) => setIsNegotiable(e.target.checked)}
-                        className="w-5 h-5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
-                      />
-                      <span className="text-sm font-bold text-slate-700">
-                        कीमत नेगोशिएबल (मोलभाव संभव)
-                      </span>
-                    </label>
-                  </div>
-                </div>
+                )}
 
                 {/* City & Locality */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -944,7 +1005,21 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   </div>
                 </div>
 
-                {/* DEDICATED OPTIONAL DETAILS TOGGLE BUTTON & FUNCTION */}
+                {/* Optional Landmark (for both Post and Reel) */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1.5">
+                    नजदीकी लैंडमार्क (वैकल्पिक)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="उदा: राम मंदिर के पास, डीपीएस स्कूल..."
+                    value={landmark}
+                    onChange={(e) => setLandmark(e.target.value)}
+                    className="w-full px-4 py-3.5 text-base border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:outline-none transition-colors"
+                  />
+                </div>
+
+                {/* DEDICATED OPTIONAL DETAILS TOGGLE BUTTON & FUNCTION (Hidden for Reel) */}
                 {uploadType !== "reel" && (
                   <div className="pt-2">
                     <button
@@ -988,36 +1063,21 @@ export const UploadPropertyForm: React.FC<UploadPropertyFormProps> = ({
                   </div>
                 )}
 
-                {/* EXPANDABLE OPTIONAL DETAILS SECTION */}
+                {/* EXPANDABLE OPTIONAL DETAILS SECTION (Hidden for Reel) */}
                 {uploadType !== "reel" && showOptionalDetails && (
                   <div className="space-y-5 pt-1 animate-in fade-in duration-200">
-                    {/* Landmark & Full Address */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                          नजदीकी लैंडमार्क (वैकल्पिक)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="उदा: राम मंदिर के पास, डीपीएस स्कूल..."
-                          value={landmark}
-                          onChange={(e) => setLandmark(e.target.value)}
-                          className="w-full px-3.5 py-3 text-sm border-2 border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                          विस्तृत पता (Address - वैकल्पिक)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="फ्लैट/मकान/प्लॉट संख्या, स्ट्रीट..."
-                          value={address}
-                          onChange={(e) => setAddress(e.target.value)}
-                          className="w-full px-3.5 py-3 text-sm border-2 border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
-                        />
-                      </div>
+                    {/* Full Address (only for Post) */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        विस्तृत पता (Address - वैकल्पिक)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="फ्लैट/मकान/प्लॉट संख्या, स्ट्रीट..."
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className="w-full px-3.5 py-3 text-sm border-2 border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
+                      />
                     </div>
 
                     {/* DYNAMIC FIELDS: RESIDENTIAL (Only Flat, House, Villa - NOT Land/Field!) */}

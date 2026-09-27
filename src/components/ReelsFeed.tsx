@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Property, Profile } from "../types/database";
+import { Property, Profile, Reel } from "../types/database";
 import { ReelCard } from "./ReelCard";
-import { supabase } from "../lib/supabase";
+import { ReelCommentsSheet } from "./ReelCommentsSheet";
+import { fetchReels, getSavedReelIds } from "../lib/supabase";
 import { Loader2 } from "lucide-react";
 
 interface ReelsFeedProps {
   currentUser: Profile | null;
-  onSelectProperty: (property: Property) => void;
-  onStartChat: (property: Property) => void;
+  onSelectProperty: (property: Property | Reel) => void;
+  onStartChat: (property: Property | Reel) => void;
   onToggleSave: (id: string) => void;
   savedPropertyIds: string[];
-  onEdit?: (property: Property) => void;
-  onCloseListing?: (property: Property) => void;
-  onReopenListing?: (property: Property) => void;
-  onDeleteListing?: (property: Property) => void;
+  onEdit?: (property: Property | Reel) => void;
+  onCloseListing?: (property: Property | Reel) => void;
+  onReopenListing?: (property: Property | Reel) => void;
+  onDeleteListing?: (property: Property | Reel) => void;
 }
 
 export const ReelsFeed: React.FC<ReelsFeedProps> = ({
@@ -27,12 +28,19 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
   onReopenListing,
   onDeleteListing,
 }) => {
-  const [feedItems, setFeedItems] = useState<Property[]>([]);
+  const [feedItems, setFeedItems] = useState<Reel[]>([]);
+  const [savedReelIds, setSavedReelIds] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [activeReelId, setActiveReelId] = useState<string | null>(null);
+  const [commentsReelId, setCommentsReelId] = useState<string | null>(null);
   
   const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  const handleInViewChange = useCallback((id: string, inView: boolean) => {
+    setActiveReelId((prev) => (inView ? id : prev === id ? null : prev));
+  }, []);
 
   // Listen to realtime property updates and deletions
   useEffect(() => {
@@ -40,10 +48,10 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       const detail = e.detail;
       if (!detail) return;
 
-      if (detail.type === "property-deleted" && detail.propertyId) {
+      if (detail.type === "reel-deleted" && detail.propertyId) {
         setFeedItems((prev) => prev.filter((p) => p.id !== detail.propertyId));
-      } else if (detail.type === "property-updated" && detail.property) {
-        const updated = detail.property as Property;
+      } else if (detail.type === "reel-updated" && detail.property) {
+        const updated = detail.property as Reel;
         setFeedItems((prev) => {
           if (updated.status && updated.status !== "active") {
             // If it's closed and the user is NOT the author, remove from public feed
@@ -72,16 +80,8 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
       const start = (currentPage - 1) * limit;
       const end = start + limit - 1;
 
-      const { data, error } = await supabase
-        .from('properties')
-        .select('*, author:profiles(*)')
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .range(start, end);
-
-      if (error) throw error;
-      
-      const newItems = (data || []) as Property[];
+      // Fetch from reels table
+      const newItems = await fetchReels(currentPage, limit);
       
       if (newItems.length < limit) {
         setHasMore(false);
@@ -137,6 +137,13 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load saved reel ids for current user
+  useEffect(() => {
+    if (currentUser) {
+      getSavedReelIds(currentUser.id).then(setSavedReelIds);
+    }
+  }, [currentUser]);
 
   // Force scroll container to the absolute top when reels populate or load
   useEffect(() => {
@@ -208,10 +215,14 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
             onStartChat={onStartChat}
             onToggleSave={onToggleSave}
             isSaved={savedPropertyIds.includes(property.id)}
+            isSavedReel={savedReelIds.includes(property.id)}
             onEdit={onEdit}
             onCloseListing={onCloseListing}
             onReopenListing={onReopenListing}
             onDeleteListing={onDeleteListing}
+            isActive={activeReelId === property.id}
+            onInViewChange={handleInViewChange}
+            onCommentClick={() => setCommentsReelId(property.id)}
           />
         ))}
         
@@ -224,6 +235,13 @@ export const ReelsFeed: React.FC<ReelsFeedProps> = ({
           ) : null}
         </div>
       </div>
+      {commentsReelId && (
+        <ReelCommentsSheet
+          reelId={commentsReelId}
+          currentUser={currentUser}
+          onClose={() => setCommentsReelId(null)}
+        />
+      )}
     </div>
   );
 };

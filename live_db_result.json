@@ -1,0 +1,1419 @@
+{
+	"meta": {
+		"note": "LIVE DATABASE VERIFIED - All data below reflects actual live database state at query time",
+		"unverified_sections": [],
+		"snapshot_generated_at": "2026-09-20T13:19:47.591689+00:00",
+		"database_snapshot_generated": true
+	},
+	"indexes": [
+		{
+			"indexdef": "CREATE INDEX comments_author_idx ON public.comments USING btree (author_id)",
+			"indexname": "comments_author_idx",
+			"tablename": "comments",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX comments_pkey ON public.comments USING btree (id)",
+			"indexname": "comments_pkey",
+			"tablename": "comments",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX comments_property_idx ON public.comments USING btree (property_id)",
+			"indexname": "comments_property_idx",
+			"tablename": "comments",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX conversations_participants_idx ON public.conversations USING btree (participant_1, participant_2)",
+			"indexname": "conversations_participants_idx",
+			"tablename": "conversations",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)",
+			"indexname": "conversations_pkey",
+			"tablename": "conversations",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX unique_conversation_participants ON public.conversations USING btree (property_id, participant_1, participant_2)",
+			"indexname": "unique_conversation_participants",
+			"tablename": "conversations",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX messages_conversation_idx ON public.messages USING btree (conversation_id)",
+			"indexname": "messages_conversation_idx",
+			"tablename": "messages",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (id)",
+			"indexname": "messages_pkey",
+			"tablename": "messages",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX messages_sender_idx ON public.messages USING btree (sender_id)",
+			"indexname": "messages_sender_idx",
+			"tablename": "messages",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX notifications_is_read_idx ON public.notifications USING btree (user_id) WHERE (is_read = false)",
+			"indexname": "notifications_is_read_idx",
+			"tablename": "notifications",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)",
+			"indexname": "notifications_pkey",
+			"tablename": "notifications",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX notifications_user_idx ON public.notifications USING btree (user_id)",
+			"indexname": "notifications_user_idx",
+			"tablename": "notifications",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX profiles_pkey ON public.profiles USING btree (id)",
+			"indexname": "profiles_pkey",
+			"tablename": "profiles",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX properties_author_idx ON public.properties USING btree (author_id)",
+			"indexname": "properties_author_idx",
+			"tablename": "properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX properties_location_gist_idx ON public.properties USING gist (location)",
+			"indexname": "properties_location_gist_idx",
+			"tablename": "properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX properties_pkey ON public.properties USING btree (id)",
+			"indexname": "properties_pkey",
+			"tablename": "properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX saved_properties_pkey ON public.saved_properties USING btree (id)",
+			"indexname": "saved_properties_pkey",
+			"tablename": "saved_properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX saved_properties_property_idx ON public.saved_properties USING btree (property_id)",
+			"indexname": "saved_properties_property_idx",
+			"tablename": "saved_properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX saved_properties_user_id_property_id_key ON public.saved_properties USING btree (user_id, property_id)",
+			"indexname": "saved_properties_user_id_property_id_key",
+			"tablename": "saved_properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE INDEX saved_properties_user_idx ON public.saved_properties USING btree (user_id)",
+			"indexname": "saved_properties_user_idx",
+			"tablename": "saved_properties",
+			"schemaname": "public"
+		},
+		{
+			"indexdef": "CREATE UNIQUE INDEX spatial_ref_sys_pkey ON public.spatial_ref_sys USING btree (srid)",
+			"indexname": "spatial_ref_sys_pkey",
+			"tablename": "spatial_ref_sys",
+			"schemaname": "public"
+		}
+	],
+	"triggers": [
+		{
+			"enabled": "O",
+			"table_name": "messages",
+			"trigger_name": "trigger_update_conversation_timestamp",
+			"function_name": "update_conversation_timestamp"
+		},
+		{
+			"enabled": "O",
+			"table_name": "properties",
+			"trigger_name": "trigger_sync_property_location",
+			"function_name": "sync_property_location"
+		},
+		{
+			"enabled": "O",
+			"table_name": "properties",
+			"trigger_name": "update_properties_updated_at",
+			"function_name": "set_updated_at"
+		}
+	],
+	"functions": [
+		{
+			"arguments": "",
+			"definition": "CREATE OR REPLACE FUNCTION public.handle_new_user()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nBEGIN\n    INSERT INTO public.profiles (id, full_name, avatar_url, phone, role)\n    VALUES (\n        NEW.id,\n        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', 'New Member'),\n        COALESCE(NEW.raw_user_meta_data->>'avatar_url', NEW.raw_user_meta_data->>'picture'),\n        NEW.phone,\n        COALESCE((NEW.raw_user_meta_data->>'role')::public.user_role, 'buyer'::public.user_role)\n    );\n    RETURN NEW;\nEND;\n$function$\n",
+			"return_type": "trigger",
+			"function_name": "handle_new_user"
+		}
+	],
+	"enum_types": [
+		{
+			"enum_name": "listing_type",
+			"enum_value": "rent",
+			"sort_order": 1
+		},
+		{
+			"enum_name": "listing_type",
+			"enum_value": "sale",
+			"sort_order": 2
+		},
+		{
+			"enum_name": "notification_type",
+			"enum_value": "new_message",
+			"sort_order": 1
+		},
+		{
+			"enum_name": "notification_type",
+			"enum_value": "post_liked",
+			"sort_order": 2
+		},
+		{
+			"enum_name": "notification_type",
+			"enum_value": "price_drop",
+			"sort_order": 3
+		},
+		{
+			"enum_name": "property_status",
+			"enum_value": "active",
+			"sort_order": 1
+		},
+		{
+			"enum_name": "property_status",
+			"enum_value": "sold",
+			"sort_order": 2
+		},
+		{
+			"enum_name": "property_status",
+			"enum_value": "rented",
+			"sort_order": 3
+		},
+		{
+			"enum_name": "property_type",
+			"enum_value": "flat",
+			"sort_order": 1
+		},
+		{
+			"enum_name": "property_type",
+			"enum_value": "house",
+			"sort_order": 2
+		},
+		{
+			"enum_name": "property_type",
+			"enum_value": "pg",
+			"sort_order": 3
+		},
+		{
+			"enum_name": "property_type",
+			"enum_value": "commercial",
+			"sort_order": 4
+		},
+		{
+			"enum_name": "property_type",
+			"enum_value": "land",
+			"sort_order": 5
+		},
+		{
+			"enum_name": "user_role",
+			"enum_value": "buyer",
+			"sort_order": 1
+		},
+		{
+			"enum_name": "user_role",
+			"enum_value": "owner",
+			"sort_order": 2
+		},
+		{
+			"enum_name": "user_role",
+			"enum_value": "broker",
+			"sort_order": 3
+		}
+	],
+	"rls_status": [
+		{
+			"rls_forced": false,
+			"table_name": "comments",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "conversations",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "messages",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "notifications",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "profiles",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "properties",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "saved_properties",
+			"rls_enabled": true
+		},
+		{
+			"rls_forced": false,
+			"table_name": "spatial_ref_sys",
+			"rls_enabled": false
+		}
+	],
+	"row_counts": [
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "comments"
+		},
+		{
+			"exists": false,
+			"row_count": null,
+			"table_name": "community_posts"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "conversations"
+		},
+		{
+			"exists": false,
+			"row_count": null,
+			"table_name": "follows"
+		},
+		{
+			"exists": false,
+			"row_count": null,
+			"table_name": "likes"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "messages"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "notifications"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "profiles"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "properties"
+		},
+		{
+			"exists": false,
+			"row_count": null,
+			"table_name": "property_media"
+		},
+		{
+			"exists": true,
+			"row_count": null,
+			"table_name": "saved_properties"
+		}
+	],
+	"constraints": [
+		{
+			"table_name": "comments",
+			"column_name": "author_id",
+			"constraint_name": "comments_author_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "comments",
+			"column_name": "property_id",
+			"constraint_name": "comments_property_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "properties",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "comments",
+			"column_name": "id",
+			"constraint_name": "comments_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "comments",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_1",
+			"constraint_name": "conversations_participant_1_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_2",
+			"constraint_name": "conversations_participant_2_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "property_id",
+			"constraint_name": "conversations_property_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "properties",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "id",
+			"constraint_name": "conversations_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "property_id",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "property_id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_2",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "property_id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_2",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_2"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_2",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_1"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_1",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "property_id"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_1",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_2"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "property_id",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_1"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "property_id",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_2"
+		},
+		{
+			"table_name": "conversations",
+			"column_name": "participant_1",
+			"constraint_name": "unique_conversation_participants",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "participant_1"
+		},
+		{
+			"table_name": "messages",
+			"column_name": "conversation_id",
+			"constraint_name": "messages_conversation_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "conversations",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "messages",
+			"column_name": "sender_id",
+			"constraint_name": "messages_sender_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "messages",
+			"column_name": "id",
+			"constraint_name": "messages_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "messages",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "notifications",
+			"column_name": "user_id",
+			"constraint_name": "notifications_user_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "notifications",
+			"column_name": "id",
+			"constraint_name": "notifications_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "notifications",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "profiles",
+			"column_name": "id",
+			"constraint_name": "profiles_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": null,
+			"foreign_column_name": null
+		},
+		{
+			"table_name": "profiles",
+			"column_name": "id",
+			"constraint_name": "profiles_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "properties",
+			"column_name": "author_id",
+			"constraint_name": "properties_author_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "properties",
+			"column_name": "id",
+			"constraint_name": "properties_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "properties",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "property_id",
+			"constraint_name": "saved_properties_property_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "properties",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "user_id",
+			"constraint_name": "saved_properties_user_id_fkey",
+			"constraint_type": "FOREIGN KEY",
+			"foreign_table_name": "profiles",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "id",
+			"constraint_name": "saved_properties_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": "saved_properties",
+			"foreign_column_name": "id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "user_id",
+			"constraint_name": "saved_properties_user_id_property_id_key",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "saved_properties",
+			"foreign_column_name": "property_id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "user_id",
+			"constraint_name": "saved_properties_user_id_property_id_key",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "saved_properties",
+			"foreign_column_name": "user_id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "property_id",
+			"constraint_name": "saved_properties_user_id_property_id_key",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "saved_properties",
+			"foreign_column_name": "property_id"
+		},
+		{
+			"table_name": "saved_properties",
+			"column_name": "property_id",
+			"constraint_name": "saved_properties_user_id_property_id_key",
+			"constraint_type": "UNIQUE",
+			"foreign_table_name": "saved_properties",
+			"foreign_column_name": "user_id"
+		},
+		{
+			"table_name": "spatial_ref_sys",
+			"column_name": "srid",
+			"constraint_name": "spatial_ref_sys_pkey",
+			"constraint_type": "PRIMARY KEY",
+			"foreign_table_name": null,
+			"foreign_column_name": null
+		}
+	],
+	"rls_policies": [
+		{
+			"cmd": "SELECT",
+			"qual": "true",
+			"roles": [
+				"public"
+			],
+			"tablename": "comments",
+			"permissive": "PERMISSIVE",
+			"policyname": "Anyone can read comments",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "INSERT",
+			"qual": null,
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "comments",
+			"permissive": "PERMISSIVE",
+			"policyname": "Authenticated users can create comments",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = author_id)"
+		},
+		{
+			"cmd": "DELETE",
+			"qual": "(auth.uid() = author_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "comments",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can delete their own comments",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "UPDATE",
+			"qual": "(auth.uid() = author_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "comments",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can update their own comments",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = author_id)"
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "((auth.uid() = participant_1) OR (auth.uid() = participant_2))",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "conversations",
+			"permissive": "PERMISSIVE",
+			"policyname": "Participants can view their own conversations",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "INSERT",
+			"qual": null,
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "conversations",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can insert conversations they participate in",
+			"schemaname": "public",
+			"with_check": "((auth.uid() = participant_1) OR (auth.uid() = participant_2))"
+		},
+		{
+			"cmd": "INSERT",
+			"qual": null,
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "messages",
+			"permissive": "PERMISSIVE",
+			"policyname": "Conversation participants can insert messages",
+			"schemaname": "public",
+			"with_check": "((auth.uid() = sender_id) AND (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((auth.uid() = c.participant_1) OR (auth.uid() = c.participant_2))))))"
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "(EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((auth.uid() = c.participant_1) OR (auth.uid() = c.participant_2)))))",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "messages",
+			"permissive": "PERMISSIVE",
+			"policyname": "Conversation participants can read messages",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "UPDATE",
+			"qual": "(auth.uid() = user_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "notifications",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can update their own notifications",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = user_id)"
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "(auth.uid() = user_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "notifications",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can view their own notifications",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "true",
+			"roles": [
+				"public"
+			],
+			"tablename": "profiles",
+			"permissive": "PERMISSIVE",
+			"policyname": "Public Profiles are viewable by everyone",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "UPDATE",
+			"qual": "(auth.uid() = id)",
+			"roles": [
+				"public"
+			],
+			"tablename": "profiles",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can update their own profile",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = id)"
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "((status = 'active'::property_status) OR (auth.uid() = author_id))",
+			"roles": [
+				"public"
+			],
+			"tablename": "properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Anyone can read active properties",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "INSERT",
+			"qual": null,
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Authenticated users can create properties",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = author_id)"
+		},
+		{
+			"cmd": "DELETE",
+			"qual": "(auth.uid() = author_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can delete their own properties",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "UPDATE",
+			"qual": "(auth.uid() = author_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can update their own properties",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = author_id)"
+		},
+		{
+			"cmd": "DELETE",
+			"qual": "(auth.uid() = user_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "saved_properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can delete their own saved properties",
+			"schemaname": "public",
+			"with_check": null
+		},
+		{
+			"cmd": "INSERT",
+			"qual": null,
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "saved_properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can insert their own saved properties",
+			"schemaname": "public",
+			"with_check": "(auth.uid() = user_id)"
+		},
+		{
+			"cmd": "SELECT",
+			"qual": "(auth.uid() = user_id)",
+			"roles": [
+				"authenticated"
+			],
+			"tablename": "saved_properties",
+			"permissive": "PERMISSIVE",
+			"policyname": "Users can read their own saved properties",
+			"schemaname": "public",
+			"with_check": null
+		}
+	],
+	"storage_buckets": [
+		{
+			"id": "property-media",
+			"name": "property-media",
+			"owner": null,
+			"public": true,
+			"created_at": "2026-09-14T06:46:59.744872+00:00",
+			"file_size_limit": null,
+			"allowed_mime_types": null
+		}
+	],
+	"storage_policies": [],
+	"tables_and_columns": [
+		{
+			"data_type": "uuid",
+			"table_name": "comments",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "comments",
+			"column_name": "property_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "comments",
+			"column_name": "author_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "text",
+			"table_name": "comments",
+			"column_name": "content",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "comments",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "conversations",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "conversations",
+			"column_name": "property_id",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "conversations",
+			"column_name": "participant_1",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "conversations",
+			"column_name": "participant_2",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "conversations",
+			"column_name": "last_message_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "messages",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "messages",
+			"column_name": "conversation_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "messages",
+			"column_name": "sender_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "text",
+			"table_name": "messages",
+			"column_name": "text",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "text",
+			"table_name": "messages",
+			"column_name": "media_url",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "boolean",
+			"table_name": "messages",
+			"column_name": "is_read",
+			"is_nullable": "NO",
+			"column_default": "false",
+			"ordinal_position": 6
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "messages",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 7
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "notifications",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "notifications",
+			"column_name": "user_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "notifications",
+			"column_name": "type",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "text",
+			"table_name": "notifications",
+			"column_name": "content",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "boolean",
+			"table_name": "notifications",
+			"column_name": "is_read",
+			"is_nullable": "NO",
+			"column_default": "false",
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "notifications",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 6
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "profiles",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "text",
+			"table_name": "profiles",
+			"column_name": "full_name",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "text",
+			"table_name": "profiles",
+			"column_name": "phone",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "profiles",
+			"column_name": "role",
+			"is_nullable": "NO",
+			"column_default": "'buyer'::user_role",
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "text",
+			"table_name": "profiles",
+			"column_name": "avatar_url",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "text",
+			"table_name": "profiles",
+			"column_name": "city",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 6
+		},
+		{
+			"data_type": "boolean",
+			"table_name": "profiles",
+			"column_name": "is_verified",
+			"is_nullable": "NO",
+			"column_default": "false",
+			"ordinal_position": 7
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "profiles",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 8
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "properties",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "properties",
+			"column_name": "author_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "title",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "description",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "numeric",
+			"table_name": "properties",
+			"column_name": "price",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 5
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "properties",
+			"column_name": "listing_type",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 6
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "properties",
+			"column_name": "property_type",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 7
+		},
+		{
+			"data_type": "integer",
+			"table_name": "properties",
+			"column_name": "bedrooms",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 8
+		},
+		{
+			"data_type": "integer",
+			"table_name": "properties",
+			"column_name": "bathrooms",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 9
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "furnishing",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 10
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "address",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 11
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "locality",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 12
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "city",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 13
+		},
+		{
+			"data_type": "double precision",
+			"table_name": "properties",
+			"column_name": "lat",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 14
+		},
+		{
+			"data_type": "double precision",
+			"table_name": "properties",
+			"column_name": "lng",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 15
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "properties",
+			"column_name": "location",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 16
+		},
+		{
+			"data_type": "ARRAY",
+			"table_name": "properties",
+			"column_name": "media_urls",
+			"is_nullable": "NO",
+			"column_default": "'{}'::text[]",
+			"ordinal_position": 17
+		},
+		{
+			"data_type": "USER-DEFINED",
+			"table_name": "properties",
+			"column_name": "status",
+			"is_nullable": "NO",
+			"column_default": "'active'::property_status",
+			"ordinal_position": 18
+		},
+		{
+			"data_type": "integer",
+			"table_name": "properties",
+			"column_name": "views_count",
+			"is_nullable": "NO",
+			"column_default": "0",
+			"ordinal_position": 19
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "properties",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 20
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "properties",
+			"column_name": "updated_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 21
+		},
+		{
+			"data_type": "text",
+			"table_name": "properties",
+			"column_name": "video_url",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 22
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "saved_properties",
+			"column_name": "id",
+			"is_nullable": "NO",
+			"column_default": "gen_random_uuid()",
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "saved_properties",
+			"column_name": "user_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "uuid",
+			"table_name": "saved_properties",
+			"column_name": "property_id",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "timestamp with time zone",
+			"table_name": "saved_properties",
+			"column_name": "created_at",
+			"is_nullable": "NO",
+			"column_default": "now()",
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "integer",
+			"table_name": "spatial_ref_sys",
+			"column_name": "srid",
+			"is_nullable": "NO",
+			"column_default": null,
+			"ordinal_position": 1
+		},
+		{
+			"data_type": "character varying",
+			"table_name": "spatial_ref_sys",
+			"column_name": "auth_name",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 2
+		},
+		{
+			"data_type": "integer",
+			"table_name": "spatial_ref_sys",
+			"column_name": "auth_srid",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 3
+		},
+		{
+			"data_type": "character varying",
+			"table_name": "spatial_ref_sys",
+			"column_name": "srtext",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 4
+		},
+		{
+			"data_type": "character varying",
+			"table_name": "spatial_ref_sys",
+			"column_name": "proj4text",
+			"is_nullable": "YES",
+			"column_default": null,
+			"ordinal_position": 5
+		}
+	],
+	"realtime_publication": [],
+	"properties_actual_values": {
+		"distinct_status": [
+			"active"
+		],
+		"distinct_listing_type": [
+			"sale"
+		],
+		"distinct_property_type": [
+			"flat",
+			"land"
+		]
+	},
+	"conversations_messages_details": {
+		"messages_indexes": [
+			{
+				"indexdef": "CREATE INDEX messages_conversation_idx ON public.messages USING btree (conversation_id)",
+				"indexname": "messages_conversation_idx"
+			},
+			{
+				"indexdef": "CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (id)",
+				"indexname": "messages_pkey"
+			},
+			{
+				"indexdef": "CREATE INDEX messages_sender_idx ON public.messages USING btree (sender_id)",
+				"indexname": "messages_sender_idx"
+			}
+		],
+		"messages_row_count": 0,
+		"conversations_row_count": 0,
+		"conversations_constraints": [
+			{
+				"column_name": "participant_1",
+				"constraint_name": "conversations_participant_1_fkey",
+				"constraint_type": "FOREIGN KEY"
+			},
+			{
+				"column_name": "participant_2",
+				"constraint_name": "conversations_participant_2_fkey",
+				"constraint_type": "FOREIGN KEY"
+			},
+			{
+				"column_name": "id",
+				"constraint_name": "conversations_pkey",
+				"constraint_type": "PRIMARY KEY"
+			},
+			{
+				"column_name": "property_id",
+				"constraint_name": "conversations_property_id_fkey",
+				"constraint_type": "FOREIGN KEY"
+			},
+			{
+				"column_name": "property_id",
+				"constraint_name": "unique_conversation_participants",
+				"constraint_type": "UNIQUE"
+			},
+			{
+				"column_name": "participant_1",
+				"constraint_name": "unique_conversation_participants",
+				"constraint_type": "UNIQUE"
+			},
+			{
+				"column_name": "participant_2",
+				"constraint_name": "unique_conversation_participants",
+				"constraint_type": "UNIQUE"
+			}
+		]
+	}
+}

@@ -5,11 +5,80 @@ import dotenv from "dotenv";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import { createClient } from "@supabase/supabase-js";
+import helmet from "helmet";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// Helmet security headers (CSP report-only for now)
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // we will set report-only manually
+    crossOriginEmbedderPolicy: false,
+    hsts: process.env.NODE_ENV === "production",
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xContentTypeOptions: true,
+    xFrameOptions: { action: "deny" },
+  })
+);
+
+// Additional CSP report-only header (covers Supabase, Vite, data/blob URLs)
+app.use((_req, res, next) => {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "media-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join("; ");
+  res.setHeader("Content-Security-Policy-Report-Only", csp);
+  next();
+});
+
+// Supabase server client for auth verification
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+let supabaseServer: ReturnType<typeof createClient> | null = null;
+function getSupabaseServer() {
+  if (!supabaseServer && SUPABASE_URL && SUPABASE_ANON_KEY) {
+    supabaseServer = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+  return supabaseServer;
+}
+
+// Simple in-memory rate limiter (per IP)
+const uploadRateMap = new Map<string, number[]>();
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const windowMs = 60_000; // 1 minute
+  const maxReq = 10;
+  const arr = uploadRateMap.get(ip) || [];
+  const recent = arr.filter(t => now - t < windowMs);
+  if (recent.length >= maxReq) return false;
+  recent.push(now);
+  uploadRateMap.set(ip, recent);
+  return true;
+}
+
+// Rate limiting for upload endpoints (per IP)
+function uploadRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: "Too many upload requests, please slow down" });
+  }
+  next();
+}
+
+app.use("/api/upload", uploadRateLimiter);
+app.use("/api/upload-base64", uploadRateLimiter);
 
 // Setup persistent local uploads directory in public/uploads
 const uploadsDir = path.join(process.cwd(), "public", "uploads");
@@ -45,27 +114,71 @@ const upload = multer({
   },
 });
 
-// File upload API endpoint
-app.post("/api/upload", upload.single("file"), (req, res) => {
+// Authentication middleware for upload endpoints
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const token = authHeader.slice(7);
+  const sb = getSupabaseServer();
+  if (!sb) {
+    console.error("Supabase server client not configured");
+    return res.status(500).json({ error: "Server misconfiguration" });
+  }
+  const { data, error } = await sb.auth.getUser(token);
+  if (error || !data?.user) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+  (req as any).user = data.user;
+  next();
+}
+
+// MIME and size validation
+const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const ALLOWED_VIDEO_MIME = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100 MB
+
+function validateFile(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file provided" });
+  }
+  const mime = req.file.mimetype;
+  const size = req.file.size;
+  let maxSize = 0;
+  if (ALLOWED_IMAGE_MIME.has(mime)) {
+    maxSize = MAX_IMAGE_SIZE;
+  } else if (ALLOWED_VIDEO_MIME.has(mime)) {
+    maxSize = MAX_VIDEO_SIZE;
+  } else {
+    return res.status(400).json({ error: "Unsupported file type" });
+  }
+  if (size > maxSize) {
+    return res.status(400).json({ error: "File size exceeds limit" });
+  }
+  next();
+}
+
+// File upload API endpoint (authenticated)
+app.post("/api/upload", requireAuth, upload.single("file"), validateFile, (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file provided" });
-    }
-    const publicUrl = `/uploads/${req.file.filename}`;
+    const file = req.file!;
+    const publicUrl = `/uploads/${file.filename}`;
     res.json({
       url: publicUrl,
-      filename: req.file.filename,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
+      filename: file.filename,
+      size: file.size,
+      mimetype: file.mimetype,
     });
   } catch (error: any) {
     console.error("Upload error in /api/upload:", error);
-    res.status(500).json({ error: error.message || "Failed to process upload" });
+    res.status(500).json({ error: "Failed to process upload" });
   }
 });
 
-// Base64 direct upload endpoint fallback
-app.post("/api/upload-base64", (req, res) => {
+// Base64 direct upload endpoint fallback (authenticated)
+app.post("/api/upload-base64", requireAuth, async (req, res) => {
   try {
     const { dataUrl, filename } = req.body;
     if (!dataUrl || typeof dataUrl !== "string") {
@@ -77,7 +190,16 @@ app.post("/api/upload-base64", (req, res) => {
     }
     const mimeType = matches[1];
     const base64Data = matches[2];
+    // Validate MIME
+    if (!ALLOWED_IMAGE_MIME.has(mimeType) && !ALLOWED_VIDEO_MIME.has(mimeType)) {
+      return res.status(400).json({ error: "Unsupported file type" });
+    }
     const buffer = Buffer.from(base64Data, "base64");
+    const size = buffer.length;
+    const maxSize = ALLOWED_IMAGE_MIME.has(mimeType) ? MAX_IMAGE_SIZE : MAX_VIDEO_SIZE;
+    if (size > maxSize) {
+      return res.status(400).json({ error: "File size exceeds limit" });
+    }
     const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "bin";
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const safeName = filename
@@ -88,7 +210,7 @@ app.post("/api/upload-base64", (req, res) => {
     res.json({ url: `/uploads/${safeName}` });
   } catch (err: any) {
     console.error("upload-base64 error:", err);
-    res.status(500).json({ error: err.message || "Failed to save base64 file" });
+    res.status(500).json({ error: "Failed to save base64 file" });
   }
 });
 

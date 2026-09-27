@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Loader2, AlertCircle, CheckCircle2, Mail, Lock, Eye, EyeOff, ArrowLeft } from "lucide-react";
-import { supabase, signInWithEmail, sendPasswordResetEmail } from "../lib/supabase";
+import { signInWithEmail, sendPasswordResetEmail, getSupabaseClient } from "../lib/supabase";
 import { Register } from "./Register";
 
 interface LoginProps {
@@ -98,7 +98,9 @@ export const Login: React.FC<LoginProps> = ({ onSuccess, initialMode = "login" }
     setLoading(true);
     setError(null);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const c = getSupabaseClient();
+      if (!c) throw new Error("Supabase not configured");
+      const { error } = await c.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: window.location.origin,

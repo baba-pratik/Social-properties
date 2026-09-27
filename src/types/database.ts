@@ -58,15 +58,15 @@ export interface Property {
   address: string;
   locality: string; // जैसे सेक्टर 4 बोकारो, टॉवर चौक गिरिडीह
   city: string; // बोकारो / गिरिडीह / अन्य
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   video_url?: string; // Vertical video support
   media_urls: string[]; // तस्वीरों के लिए URLs
-  status: PropertyStatus; // active, sold, rented
+  status: PropertyStatus; // active, sold, rented, closed
   views_count?: number;
   likes_count?: number;
   comments_count?: number;
-  // Extended fields for dynamic property forms
+  // Extended fields for dynamic property forms (stored in property_details JSONB)
   balconies?: number;
   carpet_area?: number;
   built_up_area?: number;
@@ -88,8 +88,10 @@ export interface Property {
   negotiable?: boolean;
   landmark?: string;
   contact_preference?: string;
+  // JSONB column for extended property details
+  property_details?: Record<string, any>;
   created_at: string;
-  updated_at?: string;
+  updated_at: string;
 }
 
 // Social Models
@@ -115,11 +117,12 @@ export interface CommunityPost {
   content: string;
   media_urls?: string[];
   video_url?: string;
-  city: string; // बोकारो / गिरिडीह / अन्य
+  city?: string;
   locality?: string;
   likes_count?: number;
   comments_count?: number;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Conversation {
@@ -164,6 +167,30 @@ export interface PropertyComment {
   created_at: string;
 }
 
+export interface Reel {
+  id: string;
+  author_id: string;
+  author?: Profile;
+  title: string;
+  description?: string;
+  video_url: string;
+  thumbnail_url?: string;
+  video_width?: number;
+  video_height?: number;
+  video_file_size?: number;
+  duration_sec?: number;
+  city: string;
+  locality: string;
+  landmark?: string;
+  contact_preference?: string;
+  status: "active" | "archived" | "flagged";
+  views_count?: number;
+  likes_count?: number;
+  comments_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PropertyFilterState {
   city: string; // "all" | "बोकारो" | "गिरिडीह" | "अन्य"
   locality: string;
@@ -180,4 +207,22 @@ export interface PropertyFilterState {
   author_id?: string;
   status?: string;
   sort_by: "newest" | "oldest" | "price_asc" | "price_desc" | "popular" | "views" | "likes";
+}
+
+export type NotificationType = 
+  | "new_message"
+  | "liked"
+  | "commented"
+  | "saved"
+  | "price_drop";
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  type: NotificationType;
+  content: string;
+  is_read: boolean;
+  target_type?: "property" | "reel" | "chat";
+  target_id?: string;
+  created_at: string;
 }

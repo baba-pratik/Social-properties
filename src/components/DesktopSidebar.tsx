@@ -1,6 +1,8 @@
 import React from "react";
-import { Building2, Home, Search, PlusSquare, MessageCircle, Heart, User, Film, LogOut } from "lucide-react";
+import { Users, Film, Home, MessageCircle, Settings, HelpCircle, LogOut, User, Bell, Bookmark, MapPin, Building2, Film as FilmIcon, Info } from "lucide-react";
 import { Profile } from "../types/database";
+import { BrandMark } from "./BrandMark";
+import { getSupabaseClient } from "../lib/supabase";
 
 interface DesktopSidebarProps {
   activeTab: string;
@@ -8,6 +10,8 @@ interface DesktopSidebarProps {
   unreadCount?: number;
   currentUser: Profile | null;
   onOpenAuth: () => void;
+  onOpenAbout: () => void;
+  onLogout: () => void;
 }
 
 export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
@@ -16,51 +20,63 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   unreadCount = 0,
   currentUser,
   onOpenAuth,
+  onOpenAbout,
+  onLogout,
 }) => {
   const navItems = [
-    { id: "feed", label: "होम (Home)", icon: Home },
-    { id: "reels", label: "रील्स (Reels)", icon: Film },
-    { id: "upload", label: "अपलोड (Upload)", icon: PlusSquare },
-    { id: "search", label: "सर्च (Search)", icon: Search },
-    { id: "messages", label: "चैट (Chat)", icon: MessageCircle },
-    { id: "saved", label: "सेव्ड (Saved)", icon: Heart },
+    { id: "community", label: "समुदाय", icon: Users },
+    { id: "reels", label: "रील्स", icon: Film },
+    { id: "messages", label: "चैट", icon: MessageCircle },
+    { id: "profile", label: "प्रोफ़ाइल", icon: User },
+  ];
+
+  const bottomItems = [
+    { id: "myProperties", label: "मेरी प्रॉपर्टीज", icon: Building2 },
+    { id: "myReels", label: "मेरी रील्स", icon: FilmIcon },
+    { id: "saved", label: "सहेजी गईं", icon: Bookmark },
+    { id: "notifications", label: "सूचनाएं", icon: Bell },
+    { id: "location", label: "स्थान", icon: MapPin },
+    { id: "settings", label: "सेटिंग्स", icon: Settings },
+    { id: "help", label: "सहायता", icon: HelpCircle },
+    { id: "about", label: "हमारे बारे में", icon: Info },
+    { id: "logout", label: "लॉगआउट", icon: LogOut },
   ];
 
   return (
-    <div className="hidden md:flex flex-col fixed left-0 top-0 h-screen w-64 lg:w-72 bg-white border-r border-slate-200 py-8 px-4 z-50">
-      {/* Logo */}
+    <aside className="hidden md:flex md:flex-col fixed left-0 top-0 h-screen w-64 bg-[var(--color-surface)] border-r border-[var(--color-border)] z-50 flex-col">
+      {/* Brand Area */}
       <div
-        onClick={() => onTabChange("feed")}
-        className="flex items-center gap-3 cursor-pointer select-none mb-10 px-2 group"
+        onClick={() => onTabChange("community")}
+        className="flex items-center gap-3 cursor-pointer select-none p-4 border-b border-[var(--color-border)] hover:bg-[var(--color-background)] transition-colors"
       >
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-          <Building2 className="w-6 h-6" />
-        </div>
-        <span className="text-xl font-black tracking-tight text-slate-900 group-hover:text-emerald-700 transition-colors" style={{ fontFamily: 'var(--font-heading)' }}>
-          Social Properties
-        </span>
+        <BrandMark size="lg" showText={true} />
       </div>
 
-      {/* Navigation Links */}
-      <nav className="flex-1 flex flex-col gap-2">
+      {/* Primary Navigation */}
+      <nav className="flex-1 flex flex-col gap-1 p-3 overflow-y-auto">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
+          const Icon = item.icon;
           return (
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
-              className={`flex items-center gap-4 px-3 py-3 rounded-xl font-semibold transition-all duration-300 cursor-pointer group ${
+              className={`flex items-center gap-3 px-3 py-3 rounded-xl font-semibold transition-all duration-200 cursor-pointer ${
                 isActive
-                  ? "bg-gradient-to-r from-emerald-50/80 to-transparent text-emerald-900 border-l-4 border-emerald-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
-                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 border-l-4 border-transparent"
+                  ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)] shadow-glass"
+                  : "text-[var(--color-text-secondary)] hover:bg-[var(--color-background)] hover:text-[var(--color-text-primary)]"
               }`}
             >
-              <div className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-300 ${isActive ? 'bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-md shadow-emerald-500/30' : 'bg-slate-100 text-slate-500 group-hover:bg-slate-200 group-hover:text-slate-800'}`}>
-                <item.icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${isActive && item.id !== 'search' && item.id !== 'upload' ? 'fill-white stroke-white' : ''}`} />
+              <div className={`flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 ${
+                isActive
+                  ? "bg-[var(--color-primary)] text-white shadow-glass"
+                  : "bg-[var(--color-background)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-border)] hover:text-[var(--color-primary)]"
+              }`}>
+                <Icon className={`w-5 h-5 ${isActive ? "stroke-[2.5px] fill-current" : ""}`} />
               </div>
-              <span className="text-base tracking-tight">{item.label}</span>
+              <span className="text-sm tracking-tight">{item.label}</span>
               {item.id === "messages" && unreadCount > 0 && (
-                <span className="ml-auto bg-gradient-to-br from-rose-400 to-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md shadow-rose-500/30">
+                <span className="ml-auto bg-[var(--color-primary)] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-glass">
                   {unreadCount}
                 </span>
               )}
@@ -68,54 +84,74 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
           );
         })}
 
-        <button
-          onClick={() => {
-            if (currentUser) onTabChange("profile");
-            else onOpenAuth();
-          }}
-          className={`flex items-center gap-4 px-3 py-3 rounded-xl font-semibold transition-all duration-300 cursor-pointer group ${
-            activeTab === "profile"
-              ? "bg-gradient-to-r from-emerald-50/80 to-transparent text-emerald-900 border-l-4 border-emerald-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
-              : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 border-l-4 border-transparent"
-          }`}
-        >
-          <div className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-300 ${activeTab === 'profile' ? 'bg-gradient-to-br from-emerald-400 to-teal-500 shadow-md shadow-emerald-500/30 ring-2 ring-emerald-500/20' : 'bg-slate-100 text-slate-500 group-hover:bg-slate-200 group-hover:text-slate-800'}`}>
-            {currentUser?.avatar_url ? (
-              <img
-                src={currentUser.avatar_url}
-                alt="Profile"
-                className="w-full h-full rounded-lg object-cover"
-              />
-            ) : (
-              <User className={`w-4 h-4 transition-transform group-hover:scale-110 ${activeTab === "profile" ? "fill-white stroke-white" : ""}`} />
-            )}
-          </div>
-          <span className="text-base tracking-tight">{currentUser ? "प्रोफ़ाइल (Profile)" : "लॉगिन करें"}</span>
-        </button>
+        <div className="border-t border-[var(--color-border)] my-2" />
+
+        {bottomItems.map((item) => {
+          const Icon = item.icon;
+          const handleClick = () => {
+            switch (item.id) {
+              case "myProperties":
+              case "myReels":
+                onTabChange("profile");
+                break;
+              case "about":
+                onOpenAbout();
+                break;
+              case "logout":
+                onLogout();
+                break;
+              default:
+                // other items: saved, notifications, location, settings, help - no action yet
+                break;
+            }
+          };
+          return (
+            <button
+              key={item.id}
+              onClick={handleClick}
+              className={`flex items-center gap-3 px-3 py-3 rounded-xl font-medium transition-all duration-200 cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-background)] hover:text-[var(--color-text-primary)]`}
+            >
+              <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--color-background)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-border)] hover:text-[var(--color-primary)] transition-all duration-200">
+                <Icon className="w-5 h-5" />
+              </div>
+              <span className="text-sm tracking-tight">{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* User Profile Mini */}
       {currentUser && (
-        <div className="mt-auto border-t border-slate-100 pt-5 px-2 flex items-center gap-3">
-          {currentUser.avatar_url ? (
-            <img
-              src={currentUser.avatar_url}
-              alt="Profile"
-              className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200"
-            />
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
-              {currentUser.full_name?.charAt(0) || "U"}
+        <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-background)]">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[var(--color-primary)] to-[var(--color-primary-dark)] flex items-center justify-center font-bold text-white">
+              {currentUser.avatar_url ? (
+                <img src={currentUser.avatar_url} alt="Profile" className="w-full h-full rounded-full object-cover" />
+              ) : (
+                currentUser.full_name?.charAt(0) || "U"
+              )}
             </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-slate-900 truncate">{currentUser.full_name}</p>
-            <p className="text-xs text-slate-500 truncate capitalize">
-              {currentUser.is_verified_broker ? 'ब्रोकर' : 'उपयोगकर्ता'}
-            </p>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-[var(--color-text-primary)] truncate">{currentUser.full_name}</p>
+              <p className="text-xs text-[var(--color-text-tertiary)] truncate capitalize">
+                {currentUser.is_verified_broker ? 'ब्रोकर' : 'उपयोगकर्ता'}
+              </p>
+            </div>
           </div>
         </div>
       )}
-    </div>
+
+      {!currentUser && (
+        <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-background)]">
+          <button
+            onClick={onOpenAuth}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-bold rounded-xl transition-colors shadow-glass"
+          >
+            <LogOut className="w-5 h-5 rotate-180" />
+            लॉगिन करें
+          </button>
+        </div>
+      )}
+    </aside>
   );
 };

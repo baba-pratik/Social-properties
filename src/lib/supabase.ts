@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { Profile, Property, PropertyStatus, Conversation, Message, PropertyComment, SavedProperty, PropertyFilterState } from "../types/database";
+import { Profile, Property, PropertyStatus, Conversation, Message, PropertyComment, SavedProperty, PropertyFilterState, Reel, CommunityPost } from "../types/database";
 
 const STORAGE_KEYS = {
   SUPABASE_CONFIG: "sp_supabase_config_v1",
@@ -37,15 +37,23 @@ export function saveSupabaseConfig(config: SupabaseConfig): void {
   initSupabaseClient();
 }
 
-const configUrl = getSupabaseConfig().url;
-const validUrl = configUrl.startsWith("http") ? configUrl : "https://placeholder.supabase.co";
+let supabaseInstance: SupabaseClient | null = null;
 
-export const supabase = createClient(
-  validUrl, 
-  getSupabaseConfig().anonKey || "placeholder"
-);
+function createSupabaseClient(): SupabaseClient | null {
+  const config = getSupabaseConfig();
+  if (config.url && config.anonKey && config.url.startsWith("http") && !config.url.includes("placeholder")) {
+    try {
+      return createClient(config.url, config.anonKey);
+    } catch (err) {
+      console.warn("Failed to initialize Supabase client:", err);
+      return null;
+    }
+  }
+  return null;
+}
 
-let supabaseInstance: SupabaseClient | null = supabase;
+// Initialize immediately with config (may be placeholder)
+supabaseInstance = createSupabaseClient();
 
 export function isSupabaseConfigured(): boolean {
   const config = getSupabaseConfig();
@@ -59,19 +67,26 @@ export function isSupabaseConfigured(): boolean {
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
+  // Re-create if config changed and we don't have a valid client
+  if (!supabaseInstance || !isSupabaseConfigured()) {
+    supabaseInstance = createSupabaseClient();
+  }
   return supabaseInstance;
 }
 
 function initSupabaseClient(): void {
-  const config = getSupabaseConfig();
-  if (config.url && config.anonKey && config.url.startsWith("http") && !config.url.includes("placeholder")) {
-    try {
-      supabaseInstance = createClient(config.url, config.anonKey);
-    } catch (err) {
-      console.warn("Failed to initialize Supabase client:", err);
-      supabaseInstance = null;
-    }
-  }
+  supabaseInstance = createSupabaseClient();
+}
+
+function client(): SupabaseClient | null {
+  return getSupabaseClient();
+}
+
+export async function getAccessToken(): Promise<string | null> {
+  const sb = getSupabaseClient();
+  if (!sb) return null;
+  const { data } = await sb.auth.getSession();
+  return data.session?.access_token ?? null;
 }
 
 const LOCAL_PROPERTIES_KEY = "sp_local_properties_v2";
@@ -251,7 +266,9 @@ export async function fetchProperties(
   }
 
   try {
-    let query = supabase.from("properties").select("*, author:profiles(*)");
+    const c = client();
+    if (!c) throw new Error("Supabase not configured");
+    let query = c.from("properties").select("*, author:profiles(*)");
 
     if (filters) {
       if (filters.city && filters.city !== "all" && filters.city !== "सभी") {
@@ -340,6 +357,33 @@ export async function fetchProperties(
 
 function normalizeProperty(p: any): Property {
   if (!p) return p;
+  
+  // Extract extended fields from property_details JSONB
+  if (p.property_details && typeof p.property_details === "object") {
+    const details = p.property_details;
+    p.balconies = details.balconies ?? p.balconies;
+    p.carpet_area = details.carpet_area ?? p.carpet_area;
+    p.built_up_area = details.built_up_area ?? p.built_up_area;
+    p.floor_number = details.floor_number ?? p.floor_number;
+    p.total_floors = details.total_floors ?? p.total_floors;
+    p.parking = details.parking ?? p.parking;
+    p.property_age = details.property_age ?? p.property_age;
+    p.facing = details.facing ?? p.facing;
+    p.plot_area = details.plot_area ?? p.plot_area;
+    p.area_unit = details.area_unit ?? p.area_unit;
+    p.road_width = details.road_width ?? p.road_width;
+    p.boundary_wall = details.boundary_wall ?? p.boundary_wall;
+    p.land_use = details.land_use ?? p.land_use;
+    p.corner_plot = details.corner_plot ?? p.corner_plot;
+    p.ownership_status = details.ownership_status ?? p.ownership_status;
+    p.commercial_category = details.commercial_category ?? p.commercial_category;
+    p.washroom = details.washroom ?? p.washroom;
+    p.power_backup = details.power_backup ?? p.power_backup;
+    p.negotiable = details.negotiable ?? p.negotiable;
+    p.landmark = details.landmark ?? p.landmark;
+    p.contact_preference = details.contact_preference ?? p.contact_preference;
+  }
+  
   if (!p.video_url && Array.isArray(p.media_urls)) {
     const foundVid = p.media_urls.find((u: string) => 
       typeof u === "string" && (
@@ -358,13 +402,10 @@ function normalizeProperty(p: any): Property {
 }
 
 // Safe DB Enum Mapper for property_type & listing_type
-const KNOWN_DB_PROPERTY_TYPES = ["flat", "house", "pg", "commercial", "land"];
+// Identity function - preserves canonical PropertyType values.
+// DB schema must be updated separately to support all 11 enum values.
 function mapToSafeDbPropertyType(rawType: string): string {
-  if (KNOWN_DB_PROPERTY_TYPES.includes(rawType)) return rawType;
-  if (rawType === "villa") return "house";
-  if (["office", "shop", "warehouse"].includes(rawType)) return "commercial";
-  if (["agricultural_land"].includes(rawType)) return "land";
-  return "commercial";
+  return rawType;
 }
 
 export async function createProperty(propertyData: any): Promise<Property | null> {
@@ -378,13 +419,38 @@ export async function createProperty(propertyData: any): Promise<Property | null
     }
   }
 
+  // Build property_details JSONB from extended fields
+  const extendedFields = [
+    "balconies", "carpet_area", "built_up_area", "floor_number", "total_floors",
+    "parking", "property_age", "facing", "plot_area", "area_unit", "road_width",
+    "boundary_wall", "land_use", "corner_plot", "ownership_status",
+    "commercial_category", "washroom", "power_backup", "negotiable",
+    "landmark", "contact_preference"
+  ];
+  const propertyDetails: Record<string, any> = {};
+  for (const field of extendedFields) {
+    if (payload[field] !== undefined && payload[field] !== null) {
+      propertyDetails[field] = payload[field];
+    }
+  }
+  if (Object.keys(propertyDetails).length > 0) {
+    payload.property_details = propertyDetails;
+  }
+
+  // Remove extended fields from root payload (they go in property_details)
+  for (const field of extendedFields) {
+    delete payload[field];
+  }
+
   // First attempt: insert payload with mapped DB property type
   const safeDbPropType = mapToSafeDbPropertyType(payload.property_type);
   const attemptedPayload = { ...payload, property_type: safeDbPropType };
 
   if (isSupabaseConfigured()) {
+    const c = client();
+    if (!c) throw new Error("Supabase not configured");
     try {
-      let { data, error } = await supabase
+      let { data, error } = await c
         .from("properties")
         .insert([attemptedPayload])
         .select("*, author:profiles(*)")
@@ -421,8 +487,14 @@ export async function createProperty(propertyData: any): Promise<Property | null
         if (payload.video_url && !error.message?.includes("video_url")) {
           corePayload.video_url = payload.video_url;
         }
+        if (payload.property_details) {
+          corePayload.property_details = payload.property_details;
+        }
+        if (payload.negotiable !== undefined) {
+          corePayload.negotiable = payload.negotiable;
+        }
 
-        const retry = await supabase
+        const retry = await c
           .from("properties")
           .insert([corePayload])
           .select("*, author:profiles(*)")
@@ -431,7 +503,7 @@ export async function createProperty(propertyData: any): Promise<Property | null
         data = retry.data;
         error = retry.error;
       }
-        
+          
       if (!error && data) {
         const normalized = normalizeProperty(data);
         saveLocalProperty(normalized);
@@ -460,28 +532,12 @@ export async function createProperty(propertyData: any): Promise<Property | null
     address: payload.address,
     locality: payload.locality,
     city: payload.city,
-    lat: payload.lat,
-    lng: payload.lng,
+    lat: payload.lat ?? null,
+    lng: payload.lng ?? null,
     media_urls: payload.media_urls || [],
     video_url: payload.video_url,
     status: payload.status || "active",
-    carpet_area: payload.carpet_area,
-    built_up_area: payload.built_up_area,
-    plot_area: payload.plot_area,
-    balconies: payload.balconies,
-    floor_number: payload.floor_number,
-    total_floors: payload.total_floors,
-    parking: payload.parking,
-    property_age: payload.property_age,
-    facing: payload.facing,
-    boundary_wall: payload.boundary_wall,
-    corner_plot: payload.corner_plot,
-    commercial_category: payload.commercial_category,
-    washroom: payload.washroom,
-    power_backup: payload.power_backup,
-    negotiable: payload.negotiable,
-    landmark: payload.landmark,
-    contact_preference: payload.contact_preference,
+    property_details: payload.property_details,
   };
 
   saveLocalProperty(localProp);
@@ -498,6 +554,29 @@ export async function updateProperty(id: string, propertyData: any): Promise<Pro
     }
   }
 
+  // Build property_details JSONB from extended fields
+  const extendedFields = [
+    "balconies", "carpet_area", "built_up_area", "floor_number", "total_floors",
+    "parking", "property_age", "facing", "plot_area", "area_unit", "road_width",
+    "boundary_wall", "land_use", "corner_plot", "ownership_status",
+    "commercial_category", "washroom", "power_backup", "negotiable",
+    "landmark", "contact_preference"
+  ];
+  const propertyDetails: Record<string, any> = {};
+  for (const field of extendedFields) {
+    if (payload[field] !== undefined && payload[field] !== null) {
+      propertyDetails[field] = payload[field];
+    }
+  }
+  if (Object.keys(propertyDetails).length > 0) {
+    payload.property_details = propertyDetails;
+  }
+
+  // Remove extended fields from root payload (they go in property_details)
+  for (const field of extendedFields) {
+    delete payload[field];
+  }
+
   if (payload.property_type) {
     payload.property_type = mapToSafeDbPropertyType(payload.property_type);
   }
@@ -506,8 +585,10 @@ export async function updateProperty(id: string, propertyData: any): Promise<Pro
   }
 
   if (isSupabaseConfigured()) {
+    const c = client();
+    if (!c) throw new Error("Supabase not configured");
     try {
-      let { data, error } = await supabase
+      let { data, error } = await c
         .from("properties")
         .update(payload)
         .eq("id", id)
@@ -543,8 +624,14 @@ export async function updateProperty(id: string, propertyData: any): Promise<Pro
         if (payload.video_url && !error.message?.includes("video_url")) {
           corePayload.video_url = payload.video_url;
         }
+        if (payload.property_details) {
+          corePayload.property_details = payload.property_details;
+        }
+        if (payload.negotiable !== undefined) {
+          corePayload.negotiable = payload.negotiable;
+        }
 
-        const retry = await supabase
+        const retry = await c
           .from("properties")
           .update(corePayload)
           .eq("id", id)
@@ -599,8 +686,10 @@ export async function updatePropertyStatus(
   }
 
   if (isSupabaseConfigured()) {
+    const c = client();
+    if (!c) throw new Error("Supabase not configured");
     try {
-      let { data, error } = await supabase
+      let { data, error } = await c
         .from("properties")
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq("id", id)
@@ -611,7 +700,7 @@ export async function updatePropertyStatus(
       // If 'closed' is not supported in the database enum, fall back to domain status
       if (error && (error.message?.includes("invalid input value for enum") || error.code === "22P02") && newStatus === "closed") {
         const fallbackStatus = updatedLocal?.listing_type === "rent" ? "rented" : "sold";
-        const retry = await supabase
+        const retry = await c
           .from("properties")
           .update({ status: fallbackStatus, updated_at: new Date().toISOString() })
           .eq("id", id)
@@ -666,9 +755,11 @@ export async function deleteProperty(
   }
 
   if (isSupabaseConfigured()) {
+    const c = client();
+    if (!c) throw new Error("Supabase not configured");
     try {
       // Step 1: Verify ownership and inspect media
-      const { data: propData, error: fetchErr } = await supabase
+      const { data: propData, error: fetchErr } = await c
         .from("properties")
         .select("id, author_id, media_urls, video_url")
         .eq("id", id)
@@ -698,7 +789,8 @@ export async function deleteProperty(
       }
       if (filesToRemove.length > 0) {
         try {
-          await supabase.storage.from("property-media").remove(filesToRemove);
+          const c = client();
+          if (c) await c.storage.from("property-media").remove(filesToRemove);
         } catch (e) {
           console.warn("Storage cleanup note:", e);
         }
@@ -706,13 +798,16 @@ export async function deleteProperty(
 
       // Step 3: Remove saved property rows
       try {
-        await supabase.from("saved_properties").delete().eq("property_id", id);
+        const c = client();
+        if (c) await c.from("saved_properties").delete().eq("property_id", id);
       } catch (e) {
         console.warn("saved_properties delete note:", e);
       }
 
       // Step 4: Delete the property record (enforcing author_id if provided)
-      let delQuery = supabase.from("properties").delete().eq("id", id);
+      const c2 = client();
+      if (!c2) throw new Error("Supabase not configured");
+      let delQuery = c2.from("properties").delete().eq("id", id);
       if (authorId) {
         delQuery = delQuery.eq("author_id", authorId);
       }
@@ -741,7 +836,9 @@ export async function deleteProperty(
 }
 
 export async function fetchUserConversations(userId: string): Promise<Conversation[]> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
     .from("conversations")
     .select("*, property:properties(*), participant_1_profile:profiles!participant_1(*), participant_2_profile:profiles!participant_2(*)")
     .or(`participant_1.eq.${userId},participant_2.eq.${userId}`)
@@ -755,7 +852,9 @@ export async function fetchUserConversations(userId: string): Promise<Conversati
 }
 
 export async function fetchConversationMessages(conversationId: string): Promise<Message[]> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
     .from("messages")
     .select("*, sender:profiles(*)")
     .eq("conversation_id", conversationId)
@@ -769,6 +868,8 @@ export async function fetchConversationMessages(conversationId: string): Promise
 }
 
 export async function sendMessage(conversationId: string, senderId: string, text: string, mediaUrl?: string): Promise<Message | null> {
+  const c = client();
+  if (!c) return null;
   const newMessage = {
     conversation_id: conversationId,
     sender_id: senderId,
@@ -776,7 +877,7 @@ export async function sendMessage(conversationId: string, senderId: string, text
     media_url: mediaUrl,
   };
   
-  const { data, error } = await supabase
+  const { data, error } = await c
     .from("messages")
     .insert([newMessage])
     .select("*, sender:profiles(*)")
@@ -788,7 +889,7 @@ export async function sendMessage(conversationId: string, senderId: string, text
   }
   
   // Update last_message_at
-  await supabase
+  await c
     .from("conversations")
     .update({ last_message_at: new Date().toISOString() })
     .eq("id", conversationId);
@@ -796,8 +897,41 @@ export async function sendMessage(conversationId: string, senderId: string, text
   return data as Message;
 }
 
+export async function markMessagesAsRead(conversationId: string, userId: string): Promise<boolean> {
+  const c = client();
+  if (!c) return false;
+  const { error } = await c
+    .from("messages")
+    .update({ is_read: true })
+    .eq("conversation_id", conversationId)
+    .neq("sender_id", userId)
+    .eq("is_read", false);
+  if (error) {
+    console.error("markMessagesAsRead error:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function getUnreadCounts(userId: string): Promise<Record<string, number>> {
+  const c = client();
+  if (!c) return {};
+  const { data, error } = await c.rpc("get_unread_counts", { p_user_id: userId });
+  if (error) {
+    console.error("getUnreadCounts error:", error);
+    return {};
+  }
+  const map: Record<string, number> = {};
+  for (const row of (data || []) as { conversation_id: string; unread_count: number }[]) {
+    map[row.conversation_id] = Number(row.unread_count);
+  }
+  return map;
+}
+
 export async function getOrCreateConversation(propertyId: string, buyerId: string, ownerId: string): Promise<Conversation | null> {
-  const { data: existing, error: findError } = await supabase
+  const c = client();
+  if (!c) return null;
+  const { data: existing, error: findError } = await c
     .from("conversations")
     .select("*")
     .eq("property_id", propertyId)
@@ -808,7 +942,7 @@ export async function getOrCreateConversation(propertyId: string, buyerId: strin
     return existing as Conversation;
   }
   
-  const { data: newConv, error: createError } = await supabase
+  const { data: newConv, error: createError } = await c
     .from("conversations")
     .insert([{
       property_id: propertyId,
@@ -829,7 +963,9 @@ export async function getOrCreateConversation(propertyId: string, buyerId: strin
 }
 
 export async function fetchPropertyComments(propertyId: string): Promise<PropertyComment[]> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
     .from("comments")
     .select("*, author:profiles(*)")
     .eq("property_id", propertyId)
@@ -840,9 +976,38 @@ export async function fetchPropertyComments(propertyId: string): Promise<Propert
 }
 
 export async function addPropertyComment(propertyId: string, authorId: string, content: string): Promise<PropertyComment | null> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return null;
+  const { data, error } = await c
     .from("comments")
     .insert([{ property_id: propertyId, author_id: authorId, content }])
+    .select("*, author:profiles(*)")
+    .single();
+    
+  if (error) return null;
+  return data as PropertyComment;
+}
+
+// Reel comments
+export async function fetchReelComments(reelId: string): Promise<PropertyComment[]> {
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
+    .from("comments")
+    .select("*, author:profiles(*)")
+    .eq("reel_id", reelId)
+    .order("created_at", { ascending: true });
+    
+  if (error) return [];
+  return data as PropertyComment[];
+}
+
+export async function addReelComment(reelId: string, authorId: string, content: string): Promise<PropertyComment | null> {
+  const c = client();
+  if (!c) return null;
+  const { data, error } = await c
+    .from("comments")
+    .insert([{ reel_id: reelId, author_id: authorId, content }])
     .select("*, author:profiles(*)")
     .single();
     
@@ -884,8 +1049,11 @@ export async function getSavedPropertyIds(userId: string): Promise<string[]> {
     return localIds;
   }
 
+  const c = client();
+  if (!c) return localIds;
+
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
       .from("saved_properties")
       .select("property_id")
       .eq("user_id", userId);
@@ -912,8 +1080,11 @@ export async function fetchSavedProperties(userId: string): Promise<Property[]> 
     return localProps.filter((p) => localSavedIds.includes(p.id));
   }
 
+  const c = client();
+  if (!c) return localProps.filter((p) => localSavedIds.includes(p.id));
+
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
       .from("saved_properties")
       .select("id, property_id, created_at, property:properties(*, author:profiles(*))")
       .eq("user_id", userId)
@@ -952,20 +1123,23 @@ export async function removeSavedProperty(
   removeLocalSavedId(userId, propertyId);
 
   if (isSupabaseConfigured()) {
-    try {
-      const { error } = await supabase
-        .from("saved_properties")
-        .delete()
-        .eq("user_id", userId)
-        .eq("property_id", propertyId);
+    const c = client();
+    if (c) {
+      try {
+        const { error } = await c
+          .from("saved_properties")
+          .delete()
+          .eq("user_id", userId)
+          .eq("property_id", propertyId);
 
-      if (error) {
-        console.error("removeSavedProperty DB error:", error.message);
-        return { success: false, error: error.message };
+        if (error) {
+          console.error("removeSavedProperty DB error:", error.message);
+          return { success: false, error: error.message };
+        }
+      } catch (err: any) {
+        console.error("removeSavedProperty exception:", err);
+        return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण विशलिस्ट से हटाया नहीं जा सका।" };
       }
-    } catch (err: any) {
-      console.error("removeSavedProperty exception:", err);
-      return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण विशलिस्ट से हटाया नहीं जा सका।" };
     }
   }
 
@@ -988,18 +1162,21 @@ export async function saveProperty(
   saveLocalSavedId(userId, propertyId);
 
   if (isSupabaseConfigured()) {
-    try {
-      const { error } = await supabase
-        .from("saved_properties")
-        .upsert([{ user_id: userId, property_id: propertyId }], { onConflict: "user_id,property_id" });
+    const c = client();
+    if (c) {
+      try {
+        const { error } = await c
+          .from("saved_properties")
+          .upsert([{ user_id: userId, property_id: propertyId }], { onConflict: "user_id,property_id" });
 
-      if (error) {
-        console.error("saveProperty DB error:", error.message);
-        return { success: false, error: error.message };
+        if (error) {
+          console.error("saveProperty DB error:", error.message);
+          return { success: false, error: error.message };
+        }
+      } catch (err: any) {
+        console.error("saveProperty exception:", err);
+        return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण प्रॉपर्टी सेव नहीं हो सकी।" };
       }
-    } catch (err: any) {
-      console.error("saveProperty exception:", err);
-      return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण प्रॉपर्टी सेव नहीं हो सकी।" };
     }
   }
 
@@ -1028,52 +1205,308 @@ export async function toggleSaveProperty(userId: string, propertyId: string): Pr
   }
 }
 
-export async function fetchCommunityPosts(): Promise<any[]> {
+// Reel save/bookmark functions
+export async function getSavedReelIds(userId: string): Promise<string[]> {
   if (!isSupabaseConfigured()) return [];
+  const c = client();
+  if (!c) return [];
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
+      .from("saved_properties")
+      .select("reel_id")
+      .eq("user_id", userId)
+      .not("reel_id", "is", null);
+    if (error) {
+      console.warn("getSavedReelIds error:", error.message);
+      return [];
+    }
+    return (data || []).map((d) => d.reel_id).filter(Boolean) as string[];
+  } catch (err) {
+    console.warn("getSavedReelIds network error:", err);
+    return [];
+  }
+}
+
+export async function fetchSavedReels(userId: string): Promise<Reel[]> {
+  if (!isSupabaseConfigured()) return [];
+  const c = client();
+  if (!c) return [];
+  try {
+    const { data, error } = await c
+      .from("saved_properties")
+      .select("id, reel_id, created_at, reel:reels(*, author:profiles(*))")
+      .eq("user_id", userId)
+      .not("reel_id", "is", null)
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.warn("fetchSavedReels error:", error.message);
+      return [];
+    }
+    const savedList: Reel[] = [];
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.reel) savedList.push(item.reel as unknown as Reel);
+      }
+    }
+    return savedList;
+  } catch (err) {
+    console.warn("fetchSavedReels network error:", err);
+    return [];
+  }
+}
+
+export async function saveReel(
+  userId: string,
+  reelId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (isSupabaseConfigured()) {
+    const c = client();
+    if (c) {
+      try {
+        const { error } = await c
+          .from("saved_properties")
+          .upsert([{ user_id: userId, reel_id: reelId }], { onConflict: "user_id,reel_id" });
+        if (error) {
+          console.error("saveReel DB error:", error.message);
+          return { success: false, error: error.message };
+        }
+      } catch (err: any) {
+        console.error("saveReel exception:", err);
+        return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण रील सेव नहीं हो सकी।" };
+      }
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("social-properties-realtime", {
+        detail: { type: "saved-reel-added", userId, reelId },
+      })
+    );
+  }
+  return { success: true };
+}
+
+export async function removeSavedReel(
+  userId: string,
+  reelId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (isSupabaseConfigured()) {
+    const c = client();
+    if (c) {
+      try {
+        const { error } = await c
+          .from("saved_properties")
+          .delete()
+          .eq("user_id", userId)
+          .eq("reel_id", reelId);
+        if (error) {
+          console.error("removeSavedReel DB error:", error.message);
+          return { success: false, error: error.message };
+        }
+      } catch (err: any) {
+        console.error("removeSavedReel exception:", err);
+        return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण रील हटाई नहीं जा सकी।" };
+      }
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("social-properties-realtime", {
+        detail: { type: "saved-reel-removed", userId, reelId },
+      })
+    );
+  }
+  return { success: true };
+}
+
+export async function toggleSaveReel(userId: string, reelId: string): Promise<boolean> {
+  const currentIds = await getSavedReelIds(userId);
+  const isCurrentlySaved = currentIds.includes(reelId);
+  if (isCurrentlySaved) {
+    const res = await removeSavedReel(userId, reelId);
+    return res.success ? false : true;
+  } else {
+    const res = await saveReel(userId, reelId);
+    return res.success ? true : false;
+  }
+}
+
+export async function fetchCommunityPosts(): Promise<CommunityPost[]> {
+  if (!isSupabaseConfigured()) return [];
+  const c = client();
+  if (!c) return [];
+  try {
+    const { data, error } = await c
       .from("community_posts")
       .select("*, author:profiles(*)")
       .order("created_at", { ascending: false });
       
     if (error) {
-      // Table may not be created in schema yet (e.g. PGRST205) - return empty array without logging uncaught error
+      console.warn("fetchCommunityPosts error:", error.message);
       return [];
     }
-    return data || [];
+    return (data || []) as CommunityPost[];
   } catch {
     return [];
   }
 }
 
-export async function toggleLike(userId: string, targetId: string, type: "property" | "post"): Promise<boolean> {
-  const key = type === "property" ? "property_id" : "post_id";
+export async function createCommunityPost(postData: {
+  author_id: string;
+  content: string;
+  media_urls?: string[];
+  video_url?: string;
+  city?: string;
+  locality?: string;
+}): Promise<CommunityPost | null> {
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+  
+  const payload = {
+    ...postData,
+    likes_count: 0,
+    comments_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await c
+        .from("community_posts")
+        .insert([payload])
+        .select("*, author:profiles(*)")
+        .single();
+
+      if (!error && data) {
+        return data as CommunityPost;
+      }
+      console.warn("createCommunityPost error:", error?.message);
+    } catch (err) {
+      console.warn("createCommunityPost network error:", err);
+    }
+  }
+  return null;
+}
+
+export async function updateCommunityPost(
+  postId: string,
+  authorId: string,
+  updates: Partial<Pick<CommunityPost, "content" | "media_urls" | "video_url" | "city" | "locality">>
+): Promise<CommunityPost | null> {
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+
+  const payload = {
+    ...updates,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await c
+        .from("community_posts")
+        .update(payload)
+        .eq("id", postId)
+        .eq("author_id", authorId)
+        .select("*, author:profiles(*)")
+        .single();
+
+      if (!error && data) {
+        return data as CommunityPost;
+      }
+      console.warn("updateCommunityPost error:", error?.message);
+    } catch (err) {
+      console.warn("updateCommunityPost network error:", err);
+    }
+  }
+  return null;
+}
+
+export async function deleteCommunityPost(postId: string, authorId: string): Promise<{ success: boolean; error?: string }> {
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+
+  if (isSupabaseConfigured()) {
+    try {
+      // First get the post to clean up media
+      const { data: postData, error: fetchErr } = await c
+        .from("community_posts")
+        .select("media_urls, video_url")
+        .eq("id", postId)
+        .eq("author_id", authorId)
+        .maybeSingle();
+
+      if (fetchErr) {
+        console.warn("deleteCommunityPost fetch error:", fetchErr.message);
+      }
+
+      // Clean up media from storage
+      const allUrls = [
+        ...(postData?.media_urls || []),
+        ...(postData?.video_url ? [postData.video_url] : []),
+      ];
+      const filesToRemove: string[] = [];
+      for (const url of allUrls) {
+        if (typeof url === "string" && url.includes("/property-media/")) {
+          const parts = url.split("/property-media/");
+          if (parts[1]) {
+            filesToRemove.push(decodeURIComponent(parts[1].split("?")[0]));
+          }
+        }
+      }
+      if (filesToRemove.length > 0) {
+        try {
+          await c.storage.from("property-media").remove(filesToRemove);
+        } catch (e) {
+          console.warn("Storage cleanup note:", e);
+        }
+      }
+
+      // Delete the post
+      const { error: delError } = await c
+        .from("community_posts")
+        .delete()
+        .eq("id", postId)
+        .eq("author_id", authorId);
+
+      if (delError) {
+        console.error("deleteCommunityPost DB error:", delError.message);
+        return { success: false, error: delError.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error("deleteCommunityPost network error:", err);
+      return { success: false, error: err?.message || "नेटवर्क त्रुटि के कारण पोस्ट हटाई नहीं जा सकी।" };
+    }
+  }
+  return { success: false, error: "Supabase not configured" };
+}
+
+export type LikeTargetType = "property" | "reel" | "post";
+
+export async function toggleLike(userId: string, targetId: string, type: LikeTargetType): Promise<boolean> {
+  const key = type === "property" ? "property_id" : type === "reel" ? "reel_id" : "post_id";
+  const c = client();
+  if (!c) return false;
   try {
-    const { data: existing, error } = await supabase
+    const { data: existing, error } = await c
       .from("likes")
       .select("id")
       .eq("user_id", userId)
       .eq(key, targetId)
       .maybeSingle();
-      
+    
     if (error) {
-      // Fallback to local storage if likes table does not exist
-      const storageKey = `sp_likes_${type}_${userId}`;
-      const saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
-      if (saved.includes(targetId)) {
-        localStorage.setItem(storageKey, JSON.stringify(saved.filter((id: string) => id !== targetId)));
-        return false;
-      } else {
-        localStorage.setItem(storageKey, JSON.stringify([...saved, targetId]));
-        return true;
-      }
+      console.error("toggleLike error:", error);
+      return false;
     }
     
     if (existing) {
-      await supabase.from("likes").delete().eq("id", existing.id);
+      await c.from("likes").delete().eq("id", existing.id);
       return false;
     } else {
-      await supabase.from("likes").insert([{ user_id: userId, [key]: targetId }]);
+      await c.from("likes").insert([{ user_id: userId, [key]: targetId }]);
       return true;
     }
   } catch {
@@ -1081,15 +1514,18 @@ export async function toggleLike(userId: string, targetId: string, type: "proper
   }
 }
 
-export async function getLikes(targetId: string, type: "property" | "post"): Promise<any[]> {
-  const key = type === "property" ? "property_id" : "post_id";
+export async function getLikes(targetId: string, type: LikeTargetType): Promise<any[]> {
+  const key = type === "property" ? "property_id" : type === "reel" ? "reel_id" : "post_id";
+  const c = client();
+  if (!c) return [];
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
       .from("likes")
       .select("*")
       .eq(key, targetId);
-      
+    
     if (error) {
+      console.error("getLikes error:", error);
       return [];
     }
     return data || [];
@@ -1098,9 +1534,25 @@ export async function getLikes(targetId: string, type: "property" | "post"): Pro
   }
 }
 
-export async function toggleFollow(followerId: string, followingId: string): Promise<boolean> {
+export async function incrementViews(targetTable: "properties" | "reels", rowId: string): Promise<void> {
+  const c = client();
+  if (!c) return;
   try {
-    const { data: existing, error } = await supabase
+    const { error } = await c.rpc("increment_views", { target_table: targetTable, row_id: rowId });
+    if (error) {
+      console.error("incrementViews error:", error);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export async function toggleFollow(followerId: string, followingId: string): Promise<boolean> {
+  if (followerId === followingId) return false; // prevent self-follow
+  const c = client();
+  if (!c) return false;
+  try {
+    const { data: existing, error } = await c
       .from("follows")
       .select("id")
       .eq("follower_id", followerId)
@@ -1108,36 +1560,55 @@ export async function toggleFollow(followerId: string, followingId: string): Pro
       .maybeSingle();
       
     if (error) {
-      const storageKey = `sp_follows_${followerId}`;
-      const saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
-      if (saved.includes(followingId)) {
-        localStorage.setItem(storageKey, JSON.stringify(saved.filter((id: string) => id !== followingId)));
-        return false;
-      } else {
-        localStorage.setItem(storageKey, JSON.stringify([...saved, followingId]));
-        return true;
-      }
+      console.error("toggleFollow select error:", error);
+      return false;
     }
     
     if (existing) {
-      await supabase.from("follows").delete().eq("id", existing.id);
+      const { error: delError } = await c.from("follows").delete().eq("id", existing.id);
+      if (delError) console.error("toggleFollow delete error:", delError);
       return false;
     } else {
-      await supabase.from("follows").insert([{ follower_id: followerId, following_id: followingId }]);
+      const { error: insError } = await c.from("follows").insert([{ follower_id: followerId, following_id: followingId }]);
+      if (insError) console.error("toggleFollow insert error:", insError);
       return true;
     }
+  } catch (err) {
+    console.error("toggleFollow error:", err);
+    return false;
+  }
+}
+
+export async function isFollowing(followerId: string, followingId: string): Promise<boolean> {
+  if (followerId === followingId) return false;
+  const c = client();
+  if (!c) return false;
+  try {
+    const { data, error } = await c
+      .from("follows")
+      .select("id")
+      .eq("follower_id", followerId)
+      .eq("following_id", followingId)
+      .maybeSingle();
+    if (error) return false;
+    return !!data;
   } catch {
     return false;
   }
 }
 
 export async function getFollowers(userId: string): Promise<any[]> {
+  const c = client();
+  if (!c) return [];
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
       .from("follows")
       .select("*, follower:profiles!follower_id(*)")
       .eq("following_id", userId);
-    if (error) return [];
+    if (error) {
+      console.error("getFollowers error:", error);
+      return [];
+    }
     return data || [];
   } catch {
     return [];
@@ -1145,12 +1616,17 @@ export async function getFollowers(userId: string): Promise<any[]> {
 }
 
 export async function getFollowing(userId: string): Promise<any[]> {
+  const c = client();
+  if (!c) return [];
   try {
-    const { data, error } = await supabase
+    const { data, error } = await c
       .from("follows")
       .select("*, following:profiles!following_id(*)")
       .eq("follower_id", userId);
-    if (error) return [];
+    if (error) {
+      console.error("getFollowing error:", error);
+      return [];
+    }
     return data || [];
   } catch {
     return [];
@@ -1158,7 +1634,9 @@ export async function getFollowing(userId: string): Promise<any[]> {
 }
 
 export async function fetchPublicProfile(userId: string): Promise<Profile | null> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return null;
+  const { data, error } = await c
     .from("profiles")
     .select("*")
     .eq("id", userId)
@@ -1169,7 +1647,9 @@ export async function fetchPublicProfile(userId: string): Promise<Profile | null
 }
 
 export async function fetchUserProperties(userId: string): Promise<Property[]> {
-  const { data, error } = await supabase
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
     .from("properties")
     .select("*, author:profiles(*)")
     .eq("author_id", userId)
@@ -1189,37 +1669,48 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 export async function uploadPropertyMedia(file: File): Promise<string> {
+  const isVideo = file.type.startsWith("video/");
   const rawExt = file.name.split(".").pop();
   const fileExt =
     rawExt && /^[a-zA-Z0-9]+$/.test(rawExt)
       ? rawExt.toLowerCase()
-      : file.type.startsWith("video/")
+      : isVideo
       ? "mp4"
       : "jpg";
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
-  const filePath = `properties/${fileName}`;
 
   // 1. If Supabase is configured with real credentials (not placeholder), try Supabase Storage first
   if (isSupabaseConfigured()) {
-    try {
-      const { error: uploadError } = await supabase.storage
-        .from("property-media")
-        .upload(filePath, file, {
-          contentType: file.type || (fileExt === "mp4" ? "video/mp4" : "image/jpeg"),
-          cacheControl: "3600",
-          upsert: false,
-        });
+    const c = client();
+    if (c) {
+      try {
+        // Get authenticated user id for ownership‑scoped path
+        const { data: { user }, error: userErr } = await c.auth.getUser();
+        if (userErr || !user) {
+          console.warn("Cannot determine authenticated user for upload:", userErr?.message);
+        } else {
+          const userId = user.id;
+          const filePath = `properties/${userId}/${fileName}`;
+          const { error: uploadError } = await c.storage
+            .from("property-media")
+            .upload(filePath, file, {
+              contentType: file.type || (fileExt === "mp4" ? "video/mp4" : "image/jpeg"),
+              cacheControl: "3600",
+              upsert: false,
+            });
 
-      if (!uploadError) {
-        const { data } = supabase.storage.from("property-media").getPublicUrl(filePath);
-        if (data?.publicUrl) {
-          return data.publicUrl;
+          if (!uploadError) {
+            const { data } = c.storage.from("property-media").getPublicUrl(filePath);
+            if (data?.publicUrl) {
+              return data.publicUrl;
+            }
+          } else {
+            console.warn("Supabase storage upload error:", uploadError.message);
+          }
         }
-      } else {
-        console.warn("Supabase storage upload error:", uploadError.message);
+      } catch (supabaseErr: any) {
+        console.warn("Supabase storage upload request failed:", supabaseErr?.message || supabaseErr);
       }
-    } catch (supabaseErr: any) {
-      console.warn("Supabase storage upload request failed, falling back:", supabaseErr?.message || supabaseErr);
     }
   }
 
@@ -1227,9 +1718,13 @@ export async function uploadPropertyMedia(file: File): Promise<string> {
   try {
     const formData = new FormData();
     formData.append("file", file);
+    const token = await getAccessToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch("/api/upload", {
       method: "POST",
       body: formData,
+      headers,
     });
     if (res.ok) {
       const data = await res.json();
@@ -1240,10 +1735,21 @@ export async function uploadPropertyMedia(file: File): Promise<string> {
       console.warn("Server /api/upload returned non-200 status:", res.status);
     }
   } catch (serverErr: any) {
-    console.warn("Server /api/upload fetch failed, falling back to local object/data URL:", serverErr?.message || serverErr);
+    console.warn("Server /api/upload fetch failed:", serverErr?.message || serverErr);
   }
 
-  // 3. Guaranteed client fallback: base64 Data URL or Object URL (never throws "Failed to fetch")
+  // 3. Fallback handling: Images can use Data/Object URLs, Videos MUST have persistent storage
+  if (isVideo) {
+    // Video uploads require persistent storage (Supabase or server endpoint)
+    // NEVER return blob: or data: URLs for videos - they break on page refresh
+    const errorMsg = isSupabaseConfigured() 
+      ? "Video upload failed: Supabase Storage upload succeeded but public URL unavailable. Check bucket policies."
+      : "Video upload requires configured Supabase Storage. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY environment variables.";
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+
+  // 4. Images only: Guaranteed client fallback (Data URL or Object URL)
   try {
     if (file.size < 15 * 1024 * 1024) {
       return await fileToDataUrl(file);
@@ -1252,6 +1758,344 @@ export async function uploadPropertyMedia(file: File): Promise<string> {
   } catch (fallbackErr) {
     console.warn("Data URL conversion failed, using blob object URL:", fallbackErr);
     return URL.createObjectURL(file);
+  }
+}
+
+export interface ReelVideoMetadata {
+  videoUrl: string;
+  videoWidth: number;
+  videoHeight: number;
+  videoFileSize: number;
+  durationSec: number;
+  thumbnailUrl?: string;
+  userId: string;
+}
+
+function getVideoMetadata(file: File): Promise<{ width: number; height: number; duration: number }> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      resolve({
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration: Math.round(video.duration),
+      });
+      URL.revokeObjectURL(video.src);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(video.src);
+      reject(new Error("Failed to load video metadata"));
+    };
+    video.src = URL.createObjectURL(file);
+  });
+}
+
+export async function uploadReelVideo(file: File): Promise<ReelVideoMetadata> {
+  // Validate file type
+  const allowedTypes = ["video/mp4", "video/webm", "video/quicktime"];
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error("केवल MP4, WebM या MOV वीडियो फ़ाइलें अपलोड करें।");
+  }
+
+  // Validate file size (100 MB)
+  const MAX_SIZE = 100 * 1024 * 1024;
+  if (file.size > MAX_SIZE) {
+    throw new Error("वीडियो का आकार 100 MB से अधिक नहीं होना चाहिए।");
+  }
+
+  // Get authenticated user from active Supabase client
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+  const { data: { user }, error: authError } = await c.auth.getUser();
+  
+  // TEMPORARY DIAGNOSTICS - REMOVE AFTER DEBUG
+  console.log("[ReelUpload] auth.getUser() result:", {
+    hasUser: !!user,
+    userId: user?.id,
+    authError: authError?.message,
+    authErrorCode: authError?.code
+  });
+  
+  if (authError || !user) {
+    throw new Error("User not authenticated. Please log in to upload a reel.");
+  }
+
+  // Extract video metadata before upload
+  let width = 0;
+  let height = 0;
+  let duration = 0;
+  try {
+    const metadata = await getVideoMetadata(file);
+    width = metadata.width;
+    height = metadata.height;
+    duration = metadata.duration;
+  } catch (metaErr) {
+    console.warn("Could not extract video metadata:", metaErr);
+  }
+
+  // Generate unique filename using authenticated user's ID
+  const rawExt = file.name.split(".").pop();
+  const fileExt = rawExt && /^[a-zA-Z0-9]+$/.test(rawExt) ? rawExt.toLowerCase() : "mp4";
+  const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+  const filePath = `${user.id}/${fileName}`;
+  
+  // TEMPORARY DIAGNOSTICS
+  console.log("[ReelUpload] Generated storage path:", filePath);
+  console.log("[ReelUpload] Folder components:", filePath.split('/'));
+
+  // Upload to Supabase Storage (reels bucket) using same client
+  if (isSupabaseConfigured()) {
+    try {
+      const { error: uploadError } = await c.storage
+        .from("reels")
+        .upload(filePath, file, {
+          contentType: file.type || "video/mp4",
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      // TEMPORARY DIAGNOSTICS
+      console.log("[ReelUpload] Storage upload result:", {
+        hasError: !!uploadError,
+        errorMessage: uploadError?.message,
+        errorName: uploadError?.name
+      });
+
+      if (!uploadError) {
+        const { data } = c.storage.from("reels").getPublicUrl(filePath);
+        if (data?.publicUrl) {
+          return {
+            videoUrl: data.publicUrl,
+            videoWidth: width,
+            videoHeight: height,
+            videoFileSize: file.size,
+            durationSec: duration,
+            userId: user.id,
+          };
+        }
+      } else {
+        console.warn("Supabase reels storage upload error:", uploadError.message);
+        throw new Error(uploadError.message);
+      }
+    } catch (supabaseErr: any) {
+      // TEMPORARY DIAGNOSTICS
+      console.log("[ReelUpload] Storage upload exception:", {
+        message: supabaseErr?.message,
+        code: supabaseErr?.code,
+        statusCode: supabaseErr?.statusCode,
+        name: supabaseErr?.name,
+        stack: supabaseErr?.stack?.slice(0, 500)
+      });
+      console.warn("Supabase reels storage upload request failed:", supabaseErr?.message || supabaseErr);
+      throw supabaseErr;
+    }
+  }
+
+  // If Supabase not configured or upload failed, throw error for videos (no fallback to /api/upload)
+  throw new Error("रील वीडियो अपलोड के लिए Supabase Storage कॉन्फ़िगरेशन आवश्यक है। कृपया VITE_SUPABASE_URL और VITE_SUPABASE_ANON_KEY सेट करें।");
+}
+
+export async function createReel(reelData: {
+  title: string;
+  description?: string;
+  video_url: string;
+  video_width?: number;
+  video_height?: number;
+  video_file_size?: number;
+  duration_sec?: number;
+  city: string;
+  locality: string;
+  landmark?: string;
+  contact_preference?: string;
+  userId: string;
+}): Promise<Reel | null> {
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+
+  const { userId, ...reelDataRest } = reelData;
+  const payload = {
+    ...reelDataRest,
+    author_id: userId,
+    status: "active",
+    views_count: 0,
+    likes_count: 0,
+    comments_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await c
+        .from("reels")
+        .insert([payload])
+        .select("*, author:profiles(*)")
+        .single();
+
+      if (!error && data) {
+        return data as Reel;
+      }
+      console.warn("Supabase createReel error:", error?.message);
+      
+      if (error) {
+        try {
+          const videoUrl = reelData.video_url;
+          if (videoUrl) {
+            const url = new URL(videoUrl);
+            const pathMatch = url.pathname.match(/\/reels\/([^\/]+)\//);
+            if (pathMatch) {
+              const userFolder = pathMatch[1];
+              const fileName = url.pathname.split('/').pop();
+              if (fileName) {
+                await c.storage.from("reels").remove([`${userFolder}/${fileName}`]);
+              }
+            }
+          }
+        } catch (cleanupErr) {
+          console.warn("Failed to cleanup storage object after DB insert failure:", cleanupErr);
+        }
+      }
+    } catch (err) {
+      console.warn("createReel network error:", err);
+    }
+  }
+
+  throw new Error("Failed to create reel in database");
+}
+
+export async function updateReelStatus(
+  reelId: string,
+  newStatus: string,
+  authorId: string
+): Promise<{ success: boolean; reel?: Reel; error?: string }> {
+  const c = client();
+  if (!c) return { success: false, error: "Supabase not configured" };
+  try {
+    const { data, error } = await c
+      .from("reels")
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq("id", reelId)
+      .eq("author_id", authorId)
+      .select("*, author:profiles(*)")
+      .single();
+
+    if (error) {
+      console.error("updateReelStatus DB error:", error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (data) {
+      const normalized = data as Reel;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("social-properties-realtime", {
+            detail: { type: "reel-updated", property: normalized },
+          })
+        );
+      }
+      return { success: true, reel: normalized };
+    }
+    return { success: false, error: "Reel not found" };
+  } catch (err: any) {
+    console.error("updateReelStatus network error:", err);
+    return { success: false, error: err?.message || "Network error" };
+  }
+}
+
+export async function deleteReel(
+  reelId: string,
+  authorId: string
+): Promise<{ success: boolean; error?: string }> {
+  const c = client();
+  if (!c) return { success: false, error: "Supabase not configured" };
+  try {
+    // Fetch reel to get video_url for storage cleanup
+    const { data: reel, error: fetchErr } = await c
+      .from("reels")
+      .select("video_url, author_id")
+      .eq("id", reelId)
+      .single();
+
+    if (fetchErr || !reel) {
+      return { success: false, error: fetchErr?.message || "Reel not found" };
+    }
+    if (reel.author_id !== authorId) {
+      return { success: false, error: "Not authorized" };
+    }
+
+    // Delete storage object if possible
+    if (reel.video_url) {
+      try {
+        const url = new URL(reel.video_url);
+        const pathMatch = url.pathname.match(/\/reels\/(.+)$/);
+        if (pathMatch) {
+          const storagePath = pathMatch[1];
+          await c.storage.from("reels").remove([storagePath]);
+        }
+      } catch (storageErr) {
+        console.warn("Failed to delete reel video from storage:", storageErr);
+      }
+    }
+
+    // Delete saved_properties rows referencing this reel
+    await c.from("saved_properties").delete().eq("reel_id", reelId);
+
+    // Delete reel record
+    const { error: delError } = await c.from("reels").delete().eq("id", reelId);
+    if (delError) {
+      console.error("deleteReel DB error:", delError.message);
+      return { success: false, error: delError.message };
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("social-properties-realtime", {
+          detail: { type: "reel-deleted", propertyId: reelId },
+        })
+      );
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error("deleteReel network error:", err);
+    return { success: false, error: err?.message || "Network error" };
+  }
+}
+
+export async function fetchReels(
+  page: number = 1,
+  limit: number = 10,
+  city?: string
+): Promise<Reel[]> {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  const c = client();
+  if (!c) return [];
+
+  try {
+    let query = c
+      .from("reels")
+      .select("*, author:profiles(*)")
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+
+    if (city && city !== "all") {
+      query = query.eq("city", city);
+    }
+
+    const { data, error } = await query.range((page - 1) * limit, page * limit - 1);
+
+    if (error) {
+      console.warn("fetchReels error:", error.message);
+      return [];
+    }
+
+    return (data || []) as Reel[];
+  } catch (err) {
+    console.warn("fetchReels network error:", err);
+    return [];
   }
 }
 
@@ -1265,25 +2109,28 @@ export async function uploadProfileImage(file: File): Promise<string> {
   const filePath = `profiles/${fileName}`;
 
   if (isSupabaseConfigured()) {
-    try {
-      const { error: uploadError } = await supabase.storage
-        .from("property-media")
-        .upload(filePath, file, {
-          contentType: file.type || `image/${fileExt === "jpg" ? "jpeg" : fileExt}`,
-          cacheControl: "3600",
-          upsert: false,
-        });
+    const c = client();
+    if (c) {
+      try {
+        const { error: uploadError } = await c.storage
+          .from("property-media")
+          .upload(filePath, file, {
+            contentType: file.type || `image/${fileExt === "jpg" ? "jpeg" : fileExt}`,
+            cacheControl: "3600",
+            upsert: false,
+          });
 
-      if (!uploadError) {
-        const { data } = supabase.storage.from("property-media").getPublicUrl(filePath);
-        if (data?.publicUrl) {
-          return data.publicUrl;
+        if (!uploadError) {
+          const { data } = c.storage.from("property-media").getPublicUrl(filePath);
+          if (data?.publicUrl) {
+            return data.publicUrl;
+          }
+        } else {
+          console.warn("Supabase profile image upload error:", uploadError.message);
         }
-      } else {
-        console.warn("Supabase profile image upload error:", uploadError.message);
+      } catch (supabaseErr: any) {
+        console.warn("Supabase profile storage request failed, falling back:", supabaseErr?.message || supabaseErr);
       }
-    } catch (supabaseErr: any) {
-      console.warn("Supabase profile storage request failed, falling back:", supabaseErr?.message || supabaseErr);
     }
   }
 
@@ -1291,9 +2138,13 @@ export async function uploadProfileImage(file: File): Promise<string> {
   try {
     const formData = new FormData();
     formData.append("file", file);
+    const token = await getAccessToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch("/api/upload", {
       method: "POST",
       body: formData,
+      headers,
     });
     if (res.ok) {
       const data = await res.json();
@@ -1326,7 +2177,10 @@ export async function updateUserProfile(profile: Profile): Promise<Profile | nul
   if (profile.mobile_number !== undefined) updatePayload.mobile_number = profile.mobile_number;
   if (profile.address !== undefined) updatePayload.address = profile.address;
 
-  let { data, error } = await supabase
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+
+  let { data, error } = await c
     .from("profiles")
     .update(updatePayload)
     .eq("id", profile.id)
@@ -1350,7 +2204,7 @@ export async function updateUserProfile(profile: Profile): Promise<Profile | nul
     if (profile.avatar_url) corePayload.avatar_url = profile.avatar_url;
     if (profile.bio && !error.message?.includes("bio")) corePayload.bio = profile.bio;
 
-    const retry = await supabase
+    const retry = await c
       .from("profiles")
       .update(corePayload)
       .eq("id", profile.id)
@@ -1402,7 +2256,10 @@ export async function saveUserProfile(profileData: {
     created_at: profileData.created_at || new Date().toISOString(),
   };
 
-  let { data, error } = await supabase
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+
+  let { data, error } = await c
     .from("profiles")
     .upsert(fullPayload)
     .select("*")
@@ -1424,7 +2281,7 @@ export async function saveUserProfile(profileData: {
       city: profileData.location || profileData.city || "Bokaro",
       created_at: profileData.created_at || new Date().toISOString(),
     };
-    const retry = await supabase
+    const retry = await c
       .from("profiles")
       .upsert(fallbackPayload)
       .select("*")
@@ -1445,7 +2302,9 @@ export async function saveUserProfile(profileData: {
 }
 
 export async function signUpWithEmail(params: RegisterUserData) {
-  const { data, error } = await supabase.auth.signUp({
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+  const { data, error } = await c.auth.signUp({
     email: params.email.trim(),
     password: params.password,
     options: {
@@ -1487,7 +2346,9 @@ export async function signUpWithEmail(params: RegisterUserData) {
 }
 
 export async function signInWithEmail(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+  const { data, error } = await c.auth.signInWithPassword({
     email: email.trim(),
     password,
   });
@@ -1496,10 +2357,73 @@ export async function signInWithEmail(email: string, password: string) {
 }
 
 export async function sendPasswordResetEmail(email: string) {
-  const { data, error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+  const c = client();
+  if (!c) throw new Error("Supabase not configured");
+  const { data, error } = await c.auth.resetPasswordForEmail(email.trim(), {
     redirectTo: `${window.location.origin}`,
   });
   if (error) throw error;
   return data;
+}
+
+// Notifications
+export interface Notification {
+  id: string;
+  user_id: string;
+  type: "new_message" | "liked" | "commented" | "saved" | "price_drop";
+  content: string;
+  is_read: boolean;
+  target_type?: "property" | "reel" | "chat";
+  target_id?: string;
+  created_at: string;
+}
+
+export async function fetchNotifications(userId: string, limit = 20): Promise<Notification[]> {
+  const c = client();
+  if (!c) return [];
+  const { data, error } = await c
+    .from("notifications")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn("fetchNotifications error:", error.message);
+    return [];
+  }
+  return (data || []) as Notification[];
+}
+
+export async function getUnreadNotificationCount(userId: string): Promise<number> {
+  const c = client();
+  if (!c) return 0;
+  const { count, error } = await c
+    .from("notifications")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("is_read", false);
+  if (error) return 0;
+  return count || 0;
+}
+
+export async function markNotificationRead(notificationId: string): Promise<boolean> {
+  const c = client();
+  if (!c) return false;
+  const { error } = await c
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("id", notificationId);
+  return !error;
+}
+
+export async function markAllNotificationsRead(userId: string): Promise<boolean> {
+  const c = client();
+  if (!c) return false;
+  const { error } = await c
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("user_id", userId)
+    .eq("is_read", false);
+  return !error;
 }
 

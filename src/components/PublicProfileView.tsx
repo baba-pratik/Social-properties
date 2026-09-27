@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Profile, Property } from "../types/database";
-import { fetchPublicProfile, fetchUserProperties } from "../lib/supabase";
-import { MapPin, User, CheckCircle2, MessageCircle, UserPlus, FileVideo, Building2 } from "lucide-react";
+import { fetchPublicProfile, fetchUserProperties, toggleFollow, isFollowing, getFollowers, getFollowing } from "../lib/supabase";
+import { MapPin, User, CheckCircle2, MessageCircle, UserPlus, FileVideo, Building2, UserMinus, Users } from "lucide-react";
 import { PropertyCard } from "./PropertyCard";
 import { PropertyGridSkeleton } from "./PropertySkeleton";
+import { ConfirmModal } from "./ConfirmModal";
 
 interface PublicProfileViewProps {
   userId: string;
@@ -25,6 +26,14 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
   const [profile, setProfile] = useState<Profile | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
+  const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [showFollowersModal, setShowFollowersModal] = useState(false);
+  const [showFollowingModal, setShowFollowingModal] = useState(false);
+  const [followersList, setFollowersList] = useState<any[]>([]);
+  const [followingList, setFollowingList] = useState<any[]>([]);
+  const [loadingLists, setLoadingLists] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -34,8 +43,15 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
           fetchPublicProfile(userId),
           fetchUserProperties(userId)
         ]);
-        setProfile(profData as Profile);
+        const prof = profData as Profile;
+        setProfile(prof);
         setProperties(propsData as Property[]);
+        setFollowersCount(prof.followers_count || 0);
+        setFollowingCount(prof.following_count || 0);
+        if (currentUser) {
+          const following = await isFollowing(currentUser.id, userId);
+          setIsFollowing(following);
+        }
       } catch (error) {
         console.error("Failed to load public profile", error);
       } finally {
@@ -45,7 +61,34 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
     if (userId) {
       loadData();
     }
-  }, [userId]);
+  }, [userId, currentUser]);
+
+  const handleFollowToggle = async () => {
+    if (!currentUser || currentUser.id === userId) return;
+    const newState = await toggleFollow(currentUser.id, userId);
+    setIsFollowing(newState);
+    if (newState) {
+      setFollowersCount(c => c + 1);
+    } else {
+      setFollowersCount(c => Math.max(0, c - 1));
+    }
+  };
+
+  const openFollowersModal = async () => {
+    setLoadingLists(true);
+    const data = await getFollowers(userId);
+    setFollowersList(data);
+    setShowFollowersModal(true);
+    setLoadingLists(false);
+  };
+
+  const openFollowingModal = async () => {
+    setLoadingLists(true);
+    const data = await getFollowing(userId);
+    setFollowingList(data);
+    setShowFollowingModal(true);
+    setLoadingLists(false);
+  };
 
   if (loading) {
     return (
@@ -70,6 +113,8 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
     );
   }
 
+  const isOwnProfile = currentUser && currentUser.id === userId;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-6">
       
@@ -88,8 +133,8 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
               className="w-24 h-24 sm:w-32 sm:h-32 rounded-full object-cover ring-4 ring-white shadow-lg"
             />
           ) : (
-            <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shadow-lg border-4 border-white">
-              <User className="w-12 h-12 sm:w-16 sm:h-16" />
+            <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center shadow-lg border-4 border-white font-bold text-3xl sm:text-4xl">
+              {profile.full_name?.charAt(0) || "U"}
             </div>
           )}
         </div>
@@ -112,24 +157,33 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
               <div className="font-black text-xl">{properties.length}</div>
               <div className="text-xs text-slate-500">पोस्ट्स</div>
             </div>
-            <div className="text-center">
-              <div className="font-black text-xl">
-                {/* Mock followers count for social feel */}
-                {Math.floor(Math.random() * 500) + 50}
-              </div>
+            <div className="text-center cursor-pointer" onClick={openFollowersModal}>
+              <div className="font-black text-xl">{followersCount}</div>
               <div className="text-xs text-slate-500">फ़ॉलोअर्स</div>
+            </div>
+            <div className="text-center cursor-pointer" onClick={openFollowingModal}>
+              <div className="font-black text-xl">{followingCount}</div>
+              <div className="text-xs text-slate-500">फ़ॉलोइंग</div>
             </div>
           </div>
         </div>
 
         <div className="flex flex-col gap-3 w-full sm:w-auto mt-4 sm:mt-0 z-10">
-          <button className="px-8 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-2xl transition-colors shadow-lg shadow-slate-200 flex items-center justify-center gap-2">
-            <UserPlus className="w-5 h-5" />
-            फ़ॉलो करें
-          </button>
+          {!isOwnProfile && (
+            <button 
+              onClick={handleFollowToggle}
+              className={`px-8 py-3 font-bold rounded-2xl transition-colors shadow-lg flex items-center justify-center gap-2 ${
+                isFollowing
+                  ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700 border border-emerald-300'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white'
+              }`}
+            >
+              {isFollowing ? <UserMinus className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
+              {isFollowing ? 'फॉलो कर रहे हैं' : 'फॉलो करें'}
+            </button>
+          )}
           <button 
             onClick={() => {
-              // Just pick their first property to start chat, or handle directly
               if (properties.length > 0) {
                 onStartChat(properties[0]);
               }
@@ -173,6 +227,67 @@ export const PublicProfileView: React.FC<PublicProfileViewProps> = ({
         )}
       </div>
 
+      {/* Followers Modal */}
+      {showFollowersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto shadow-xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="font-bold text-lg">फॉलोअर्स ({followersCount})</h2>
+              <button onClick={() => setShowFollowersModal(false)} className="text-slate-500 hover:text-slate-700">✕</button>
+            </div>
+            <div className="p-4">
+              {loadingLists ? <div className="text-center text-slate-500">लोड हो रहा है...</div> :
+              followersList.length === 0 ? <div className="text-center text-slate-500">कोई फॉलोअर्स नहीं</div> :
+              followersList.map((f: any) => (
+                <div key={f.follower?.id || f.id} className="flex items-center gap-3 p-2 border-b last:border-0">
+                  {f.follower?.avatar_url ? (
+                    <img src={f.follower.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm">
+                      {f.follower?.full_name?.charAt(0) || "U"}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-medium">{f.follower?.full_name}</div>
+                    <div className="text-xs text-slate-500">{f.follower?.city}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Following Modal */}
+      {showFollowingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto shadow-xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="font-bold text-lg">फॉलोइंग ({followingCount})</h2>
+              <button onClick={() => setShowFollowingModal(false)} className="text-slate-500 hover:text-slate-700">✕</button>
+            </div>
+            <div className="p-4">
+              {loadingLists ? <div className="text-center text-slate-500">लोड हो रहा है...</div> :
+              followingList.length === 0 ? <div className="text-center text-slate-500">कोई फॉलोइंग नहीं</div> :
+              followingList.map((f: any) => (
+                <div key={f.following?.id || f.id} className="flex items-center gap-3 p-2 border-b last:border-0">
+                  {f.following?.avatar_url ? (
+                    <img src={f.following.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm">
+                      {f.following?.full_name?.charAt(0) || "U"}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-medium">{f.following?.full_name}</div>
+                    <div className="text-xs text-slate-500">{f.following?.city}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -14,10 +14,14 @@ import {
   UserCheck,
   PlusCircle,
   Compass,
+  Users,
+  UserMinus,
+  UserPlus,
 } from "lucide-react";
 import { PropertyCard } from "./PropertyCard";
 import { CommunityPostCard } from "./CommunityPostCard";
 import { EditProfileModal } from "./EditProfileModal";
+import { getFollowers, getFollowing } from "../lib/supabase";
 
 interface ProfileViewProps {
   currentUser: Profile;
@@ -57,6 +61,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [activeTab, setActiveTab] = useState<"properties" | "saved" | "posts">("properties");
   const [propertyStatusFilter, setPropertyStatusFilter] = useState<"all" | "active" | "closed">("all");
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [showFollowersModal, setShowFollowersModal] = useState(false);
+  const [showFollowingModal, setShowFollowingModal] = useState(false);
+  const [followersList, setFollowersList] = useState<any[]>([]);
+  const [followingList, setFollowingList] = useState<any[]>([]);
+  const [loadingLists, setLoadingLists] = useState(false);
 
   // Filter items by current user
   const userProperties = useMemo(() => {
@@ -102,6 +111,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       ? "खरीदार / अन्वेषक"
       : "प्रॉपर्टी मालिक";
 
+  const openFollowersModal = async () => {
+    setLoadingLists(true);
+    const data = await getFollowers(currentUser.id);
+    setFollowersList(data);
+    setShowFollowersModal(true);
+    setLoadingLists(false);
+  };
+
+  const openFollowingModal = async () => {
+    setLoadingLists(true);
+    const data = await getFollowing(currentUser.id);
+    setFollowingList(data);
+    setShowFollowingModal(true);
+    setLoadingLists(false);
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       {/* Profile Header Card */}
@@ -109,16 +134,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         {/* Avatar */}
         <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full p-1 bg-gradient-to-tr from-emerald-500 to-teal-700 shrink-0 shadow-sm">
           <div className="w-full h-full rounded-full border-4 border-white overflow-hidden bg-slate-100">
-            <img
-              src={
-                currentUser.avatar_url ||
-                `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                  currentUser.full_name || "User"
-                )}&background=10b981&color=fff`
-              }
-              alt={currentUser.full_name}
-              className="w-full h-full object-cover"
-            />
+            {currentUser.avatar_url ? (
+              <img
+                src={currentUser.avatar_url}
+                alt={currentUser.full_name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-2xl">
+                {currentUser.full_name?.charAt(0) || "U"}
+              </div>
+            )}
           </div>
         </div>
 
@@ -180,7 +206,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
 
           {/* Followers / Stats Counters */}
-          <div className="flex items-center justify-center sm:justify-start gap-8 py-2 border-y border-slate-100 sm:border-none">
+          <div className="flex items-center justify-center sm:justify-start gap-8 py-2 border-y border-slate-100 sm:border-none flex-wrap">
             <div className="text-center sm:text-left">
               <span className="block font-black text-lg text-slate-900">{userProperties.length}</span>
               <span className="text-[11px] text-slate-500 font-semibold">संपत्तियां</span>
@@ -192,6 +218,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <div className="text-center sm:text-left">
               <span className="block font-black text-lg text-slate-900">{userPosts.length}</span>
               <span className="text-[11px] text-slate-500 font-semibold">लोकल पोस्ट</span>
+            </div>
+            <div className="text-center sm:text-left cursor-pointer" onClick={openFollowersModal}>
+              <span className="block font-black text-lg text-slate-900">{currentUser.followers_count || 0}</span>
+              <span className="text-[11px] text-slate-500 font-semibold">फॉलोअर्स</span>
+            </div>
+            <div className="text-center sm:text-left cursor-pointer" onClick={openFollowingModal}>
+              <span className="block font-black text-lg text-slate-900">{currentUser.following_count || 0}</span>
+              <span className="text-[11px] text-slate-500 font-semibold">फॉलोइंग</span>
             </div>
           </div>
 
@@ -402,6 +436,68 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           )
         )}
       </div>
+
+      {/* Followers Modal */}
+      {showFollowersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto shadow-xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="font-bold text-lg">फॉलोअर्स ({currentUser.followers_count || 0})</h2>
+              <button onClick={() => setShowFollowersModal(false)} className="text-slate-500 hover:text-slate-700">✕</button>
+            </div>
+            <div className="p-4">
+              {loadingLists ? <div className="text-center text-slate-500">लोड हो रहा है...</div> :
+              followersList.length === 0 ? <div className="text-center text-slate-500">कोई फॉलोअर्स नहीं</div> :
+              followersList.map((f: any) => (
+                <div key={f.follower?.id || f.id} className="flex items-center gap-3 p-2 border-b last:border-0">
+                  {f.follower?.avatar_url ? (
+                    <img src={f.follower.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm">
+                      {f.follower?.full_name?.charAt(0) || "U"}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-medium">{f.follower?.full_name}</div>
+                    <div className="text-xs text-slate-500">{f.follower?.city}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Following Modal */}
+      {showFollowingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto shadow-xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="font-bold text-lg">फॉलोइंग ({currentUser.following_count || 0})</h2>
+              <button onClick={() => setShowFollowingModal(false)} className="text-slate-500 hover:text-slate-700">✕</button>
+            </div>
+            <div className="p-4">
+              {loadingLists ? <div className="text-center text-slate-500">लोड हो रहा है...</div> :
+              followingList.length === 0 ? <div className="text-center text-slate-500">कोई फॉलोइंग नहीं</div> :
+              followingList.map((f: any) => (
+                <div key={f.following?.id || f.id} className="flex items-center gap-3 p-2 border-b last:border-0">
+                  {f.following?.avatar_url ? (
+                    <img src={f.following.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm">
+                      {f.following?.full_name?.charAt(0) || "U"}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-medium">{f.following?.full_name}</div>
+                    <div className="text-xs text-slate-500">{f.following?.city}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {isEditModalOpen && (
         <EditProfileModal

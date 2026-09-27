@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { CommunityPost, Profile } from "../types/database";
-import { ThumbsUp, MessageCircle, Share2, CheckCircle2, MoreHorizontal } from "lucide-react";
+import { ThumbsUp, MessageCircle, Share2, CheckCircle2, MoreHorizontal, Edit2, Trash2 } from "lucide-react";
 import { formatRelativeTime } from "../lib/utils";
 import { toggleLike, getLikes } from "../lib/supabase";
 import { ShareModal } from "./ShareModal";
 import { Link } from "./Link";
+import { ConfirmModal } from "./ConfirmModal";
 
 interface CommunityPostCardProps {
   post: CommunityPost;
   currentUser: Profile | null;
   onComment: (post: CommunityPost) => void;
   onRequestAuth?: () => void;
+  onEdit?: (post: CommunityPost) => void;
+  onDelete?: (post: CommunityPost) => void;
 }
 
 export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
@@ -18,10 +21,16 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
   currentUser,
   onComment,
   onRequestAuth,
+  onEdit,
+  onDelete,
 }) => {
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
   const [isLiked, setIsLiked] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const isAuthor = currentUser && post.author_id === currentUser.id;
 
   useEffect(() => {
     if (currentUser) {
@@ -46,20 +55,36 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
     setIsShareModalOpen(true);
   };
   
+  const handleEditClick = () => {
+    setIsMenuOpen(false);
+    if (onEdit) onEdit(post);
+  };
+
+  const handleDeleteClick = () => {
+    setIsMenuOpen(false);
+    setShowDeleteConfirm(true);
+  };
+  
   const shareUrl = `${window.location.origin}/post/${post.id}`;
   const whatsappText = `${post.author?.full_name} ने ${post.locality}, ${post.city} के बारे में अपडेट साझा किया: "${post.content}"\n\nSocial Properties पर पढ़ें!`;
 
   return (
     <>
-    <div className="bg-white rounded-none sm:rounded-2xl border-y sm:border border-slate-200/80 shadow-none sm:shadow-xs overflow-hidden flex flex-col snap-start sm:mb-4">
+    <div className="bg-white rounded-none sm:rounded-2xl border-y sm:border border-slate-200/80 shadow-none sm:shadow-xs overflow-hidden flex flex-col snap-start sm:mb-4 relative">
       {/* Header */}
       <div className="p-4 flex justify-between items-start">
         <Link href={`/profile/${post.author_id}`} className="flex gap-3 hover:opacity-80 transition-opacity">
-          <img
-            src={post.author?.avatar_url || `https://ui-avatars.com/api/?name=${post.author?.full_name}&background=f1f5f9`}
-            alt={post.author?.full_name}
-            className="w-10 h-10 rounded-full object-cover"
-          />
+          {post.author?.avatar_url ? (
+            <img
+              src={post.author.avatar_url}
+              alt={post.author.full_name}
+              className="w-10 h-10 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm">
+              {post.author?.full_name?.charAt(0) || "U"}
+            </div>
+          )}
           <div>
             <div className="flex items-center gap-1">
               <h4 className="font-bold text-slate-900 text-sm">{post.author?.full_name}</h4>
@@ -74,9 +99,57 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
             </div>
           </div>
         </Link>
-        <button className="text-slate-400 hover:text-slate-600 cursor-pointer">
-          <MoreHorizontal className="w-5 h-5" />
-        </button>
+        
+        {/* More Options Menu */}
+        <div className="relative">
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+            aria-label="अधिक विकल्प"
+          >
+            <MoreHorizontal className="w-5 h-5" />
+          </button>
+          
+          {isMenuOpen && (
+            <>
+              <div 
+                className="fixed inset-0 z-10" 
+                onClick={() => setIsMenuOpen(false)} 
+              />
+              <div className="absolute right-0 top-full mt-1 z-20 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[140px]">
+                {isAuthor && (
+                  <>
+                    <button
+                      onClick={handleEditClick}
+                      className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      संपादित करें
+                    </button>
+                    <button
+                      onClick={handleDeleteClick}
+                      className="w-full px-4 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      हटाएं
+                    </button>
+                  </>
+                )}
+                {!isAuthor && (
+                  <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      if (onRequestAuth) onRequestAuth();
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                  >
+                    <span>रिपोर्ट करें</span>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -99,7 +172,7 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
 
       {/* Action Bar */}
       <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between">
-        <div className="flex gap-6">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={handleToggleLike}
             className={`flex items-center gap-1.5 text-sm font-semibold cursor-pointer transition-colors ${
@@ -129,6 +202,23 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
       </div>
     </div>
     
+    {/* Delete Confirmation Modal */}
+    {showDeleteConfirm && (
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        title="पोस्ट हटाएं"
+        message={`क्या आप वाकई "${post.content.substring(0, 50)}..." को हटाना चाहते हैं? यह कार्रवाई वापस नहीं ली जा सकती।`}
+        confirmLabel="हाँ, हटाएं"
+        cancelLabel="रद्द करें"
+        isDanger
+        onConfirm={async () => {
+          if (onDelete) await onDelete(post);
+          setShowDeleteConfirm(false);
+        }}
+      />
+    )}
+
     <ShareModal
       isOpen={isShareModalOpen}
       onClose={() => setIsShareModalOpen(false)}

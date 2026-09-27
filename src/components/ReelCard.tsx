@@ -6,41 +6,47 @@ import {
   MapPin, 
   CheckCircle2, 
   Eye, 
-  Volume2, 
-  VolumeX, 
   MessageSquare, 
   Bookmark, 
-  Play, 
-  Pause,
-  ChevronDown
+  ChevronDown,
+  Volume2,
+  VolumeX,
+  Play,
+  Loader2
 } from "lucide-react";
-import { Property, Profile } from "../types/database";
+import { Property, Profile, Reel } from "../types/database";
 import { formatPrice, formatRelativeTime, PROPERTY_TYPE_LABELS } from "../lib/utils";
-import { toggleLike, getLikes } from "../lib/supabase";
+import { toggleLike, getLikes, incrementViews, LikeTargetType, toggleSaveReel, getSavedReelIds } from "../lib/supabase";
 import { ShareModal } from "./ShareModal";
 import { Link } from "./Link";
 import { PropertyActionMenu } from "./PropertyActionMenu";
-// @ts-ignore
-import ReactPlayer from "react-player";
+import { ReelPlayer } from "./ReelPlayer";
 import { useInView } from "react-intersection-observer";
 
+type ReelItem = Property | Reel;
+
 interface ReelCardProps {
-  property: Property;
+  property: ReelItem;
   isSaved: boolean;
+  isSavedReel?: boolean;
   onToggleSave: (id: string) => void;
-  onSelectProperty: (property: Property) => void;
-  onStartChat: (property: Property) => void;
+  onSelectProperty: (property: ReelItem) => void;
+  onStartChat: (property: ReelItem) => void;
   currentUser: Profile | null;
   onRequestAuth?: () => void;
-  onEdit?: (property: Property) => void;
-  onCloseListing?: (property: Property) => void;
-  onReopenListing?: (property: Property) => void;
-  onDeleteListing?: (property: Property) => void;
+  onEdit?: (property: ReelItem) => void;
+  onCloseListing?: (property: ReelItem) => void;
+  onReopenListing?: (property: ReelItem) => void;
+  onDeleteListing?: (property: ReelItem) => void;
+  isActive?: boolean;
+  onInViewChange?: (id: string, inView: boolean) => void;
+  onCommentClick?: (property: ReelItem) => void;
 }
 
 export const ReelCard: React.FC<ReelCardProps> = ({
   property,
   isSaved,
+  isSavedReel = false,
   onToggleSave,
   onSelectProperty,
   onStartChat,
@@ -50,50 +56,72 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   onCloseListing,
   onReopenListing,
   onDeleteListing,
+  isActive = false,
+  onInViewChange,
+  onCommentClick,
 }) => {
   const [isLiked, setIsLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(0);
-  const [isMuted, setIsMuted] = useState(true);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [videoProgress, setVideoProgress] = useState(0);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   
-  const playerRef = useRef<any>(null);
-  
+  // Track viewed state per session to avoid duplicate increments
+  const viewedRef = useRef<Set<string>>(new Set());
+
+  // Determine if this item is a Reel (has duration_sec field)
+  const isReel = 'duration_sec' in property;
+
+  // Compute aspect ratio from video dimensions if available, else default 9/16
+  const videoWidth = (property as any).video_width;
+  const videoHeight = (property as any).video_height;
+  const aspectRatio = videoWidth && videoHeight ? videoWidth / videoHeight : 9 / 16;
+
   // Intersection Observer to detect when this specific reel is fully in view
   const { ref: containerRef, inView } = useInView({
-    threshold: 0.7, // Play when 70% visible
+    threshold: 0.7,
   });
 
   useEffect(() => {
-    // In a real app we would fetch real likes from Firestore, mocking here for UI consistency based on existing code
-    setLikesCount(property.likes_count || 0);
-  }, [property]);
-
-  const handleTimeUpdate = (state: { playedSeconds: number, played: number }) => {
-    setVideoProgress(state.played * 100);
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVideoProgress(val);
-    if (playerRef.current) {
-      playerRef.current.seekTo(val / 100, 'fraction');
+    getLikes(property.id, "reel").then((likes) => {
+      setLikesCount(likes.length);
+      if (currentUser) {
+        setIsLiked(likes.some((l) => l.user_id === currentUser.id));
+      }
+    });
+    
+    // Increment view count once per session when reel comes into view
+    const viewKey = `reel:${property.id}`;
+    if (inView && !viewedRef.current.has(viewKey)) {
+      viewedRef.current.add(viewKey);
+      incrementViews("reels", property.id);
     }
-  };
+  }, [property.id, currentUser, inView]);
+
+  // Report visibility to the feed so the shared ReelPlayer mounts only for the active reel
+  useEffect(() => {
+    onInViewChange?.(property.id, inView);
+  }, [inView, property.id, onInViewChange]);
 
   const handleToggleLike = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentUser) return;
-    setIsLiked(!isLiked);
-    setLikesCount(prev => isLiked ? prev - 1 : prev + 1);
-    // Real implementation would update Firestore here
+    const newlyLiked = await toggleLike(currentUser.id, property.id, "reel");
+    setIsLiked(newlyLiked);
+    setLikesCount((prev) => (newlyLiked ? prev + 1 : Math.max(0, prev - 1)));
   };
 
-  const handleToggleSaveClick = (e: React.MouseEvent) => {
+  const handleToggleSaveClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    onToggleSave(property.id);
+    if (!currentUser) {
+      onRequestAuth?.();
+      return;
+    }
+    if (isReel) {
+      const newlySaved = await toggleSaveReel(currentUser.id, property.id);
+      // optimistic update of isSavedReel via parent state not needed; parent will refresh via realtime event
+    } else {
+      onToggleSave(property.id);
+    }
   };
 
   const handleShareClick = (e: React.MouseEvent) => {
@@ -120,39 +148,28 @@ export const ReelCard: React.FC<ReelCardProps> = ({
     <div 
       ref={containerRef}
       className="relative w-full h-full min-h-full shrink-0 snap-start snap-always bg-black overflow-hidden flex items-center justify-center group"
-      style={{ scrollSnapAlign: "start", height: "100%" }}
-      onClick={() => setIsPlaying(!isPlaying)}
+      style={{ scrollSnapAlign: "start", height: "100%", paddingBottom: "80px" }}
     >
-      {/* Background Blur for non-9:16 videos */}
-      {property.video_url && (
-        <div className="absolute inset-0 w-full h-full opacity-30 scale-110 blur-xl pointer-events-none z-0">
-          {/* @ts-ignore */}
-          <ReactPlayer 
-            url={property.video_url}
-            playing={inView && isPlaying}
-            muted={true}
-            loop={true}
-            width="100%"
-            height="100%"
-          />
-        </div>
-      )}
-
-      {/* Main Video Player */}
-      {property.video_url ? (
-        <div className="absolute inset-0 w-full h-full z-10 flex items-center justify-center pointer-events-none">
-          {/* @ts-ignore */}
-          <ReactPlayer 
-            ref={playerRef}
-            url={property.video_url}
-            playing={inView && isPlaying}
-            muted={isMuted}
-            loop={true}
-            width="100%"
-            height="100%"
-            onProgress={(state: any) => handleTimeUpdate(state)}
-            playsinline
-          />
+      {/* Video Layer - ReelPlayer only for active reel, otherwise poster */}
+      {property.video_url && isActive ? (
+        <ReelPlayer
+          src={property.video_url}
+          poster={property.media_urls?.[0]}
+          aspectRatio={aspectRatio}
+        />
+      ) : property.video_url ? (
+        <div className="absolute inset-0 w-full h-full z-10 flex items-center justify-center">
+          {property.media_urls?.[0] && (
+            <img 
+              src={property.media_urls[0]} 
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          )}
+          <div className="absolute inset-0 m-auto w-16 h-16 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-full text-white z-30 pointer-events-none animate-in zoom-in duration-200">
+            <Play className="w-8 h-8 ml-1" />
+          </div>
         </div>
       ) : (
         <div className="absolute inset-0 w-full h-full z-10">
@@ -173,26 +190,6 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         <Eye className="w-3.5 h-3.5 text-white/90" />
         <span className="text-white text-xs font-semibold">{property.views_count || 0}</span>
       </div>
-
-      {/* Mute/Unmute Toggle */}
-      {property.video_url && (
-        <button 
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsMuted(!isMuted);
-          }}
-          className="absolute top-6 right-4 z-20 w-10 h-10 flex items-center justify-center bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-white hover:bg-black/60 transition-colors shadow-lg"
-        >
-          {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-        </button>
-      )}
-
-      {/* Play/Pause Indicator (Fades out) */}
-      {!isPlaying && property.video_url && (
-        <div className="absolute inset-0 m-auto w-16 h-16 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-full text-white z-30 pointer-events-none animate-in zoom-in duration-200">
-          <Play className="w-8 h-8 ml-1" />
-        </div>
-      )}
 
       {/* Bottom Information Overlay */}
       {!isExpanded && (
@@ -379,7 +376,11 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onSelectProperty(property);
+            if (onCommentClick) {
+              onCommentClick(property);
+            } else {
+              onSelectProperty(property);
+            }
           }}
           className="flex flex-col items-center gap-1 cursor-pointer group pointer-events-auto"
           aria-label="Comment on property"
@@ -416,23 +417,20 @@ export const ReelCard: React.FC<ReelCardProps> = ({
 
         {/* Bookmark / Wishlist Save */}
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleSave(property.id);
-          }}
+          onClick={handleToggleSaveClick}
           className="flex flex-col items-center gap-1 cursor-pointer group pointer-events-auto"
           aria-label="Save property"
         >
           <div className="bg-black/20 backdrop-blur-sm p-2 rounded-full border border-white/10 group-active:scale-90 transition-transform">
             <Bookmark
               className={`w-7 h-7 drop-shadow-xl ${
-                isSaved ? "fill-amber-400 text-amber-400" : "text-white"
+                (isReel ? isSavedReel : isSaved) ? "fill-amber-400 text-amber-400" : "text-white"
               }`}
               strokeWidth={1.5}
             />
           </div>
           <span className="text-white font-bold text-[11px] drop-shadow-md">
-            {isSaved ? "सहेजा" : "सेव"}
+            {(isReel ? isSavedReel : isSaved) ? "सहेजा" : "सेव"}
           </span>
         </button>
 
@@ -452,46 +450,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             <span className="text-white font-bold text-[10px] drop-shadow-md">विकल्प</span>
           </div>
         )}
-      </div>
-
-      {/* Interactive Seekable Progress Bar (Absolute Bottom) */}
-      {property.video_url && (
-        <div 
-          className="absolute bottom-0 left-0 right-0 h-2 z-40 group cursor-pointer flex items-end pointer-events-auto"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="0.1"
-            value={videoProgress || 0}
-            onChange={handleSeek}
-            className="w-full h-1 appearance-none bg-white/20 accent-emerald-500 cursor-pointer outline-none hover:h-1.5 transition-all duration-200 m-0 p-0"
-            style={{
-              background: `linear-gradient(to right, #10b981 ${videoProgress}%, rgba(255, 255, 255, 0.2) ${videoProgress}%)`
-            }}
-          />
-          <style>{`
-            input[type=range]::-webkit-slider-thumb {
-              appearance: none;
-              width: 0px;
-              height: 0px;
-              transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-              background: #10b981;
-              border-radius: 50%;
-              box-shadow: 0 0 5px rgba(0,0,0,0.5);
-            }
-            .group:hover input[type=range]::-webkit-slider-thumb {
-              width: 14px;
-              height: 14px;
-            }
-          `}</style>
-        </div>
-      )}
-    </div>
-    
-    <ShareModal
+</div>
+</div>
+     
+     <ShareModal
       isOpen={isShareModalOpen}
       onClose={() => setIsShareModalOpen(false)}
       title={property.title}

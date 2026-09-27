@@ -84,7 +84,22 @@ CREATE TABLE IF NOT EXISTS public.saved_properties (
     UNIQUE(user_id, property_id)
 );
 
--- 6. Comments Table (सार्वजनिक टिप्पणियाँ व पूछताछ)
+-- 6. Community Posts Table (सामुदायिक पोस्ट्स)
+CREATE TABLE IF NOT EXISTS public.community_posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    author_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+    content TEXT NOT NULL,
+    media_urls TEXT[] DEFAULT '{}'::TEXT[],
+    video_url TEXT,
+    city TEXT,
+    locality TEXT,
+    likes_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- 7. Comments Table (सार्वजनिक टिप्पणियाँ व पूछताछ)
 CREATE TABLE IF NOT EXISTS public.comments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     property_id UUID REFERENCES public.properties(id) ON DELETE CASCADE NOT NULL,
@@ -119,6 +134,7 @@ CREATE TABLE IF NOT EXISTS public.messages (
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.properties ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_properties ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.community_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
@@ -156,6 +172,19 @@ ON public.saved_properties FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Users can remove from their saved properties" 
 ON public.saved_properties FOR DELETE USING (auth.uid() = user_id);
+
+-- Community Posts: Anyone can view; Authors can create, update, delete their posts
+CREATE POLICY "Anyone can view community posts" 
+ON public.community_posts FOR SELECT USING (true);
+
+CREATE POLICY "Authenticated users can insert community posts" 
+ON public.community_posts FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "Authors can update their own community posts" 
+ON public.community_posts FOR UPDATE USING (auth.uid() = author_id);
+
+CREATE POLICY "Authors can delete their own community posts" 
+ON public.community_posts FOR DELETE USING (auth.uid() = author_id);
 
 -- Comments: Viewable by all, insertable by authenticated users
 CREATE POLICY "Comments are viewable by everyone" 

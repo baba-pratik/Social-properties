@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { Property, Profile } from "../types/database";
 import { formatPrice, formatRelativeTime, PROPERTY_TYPE_LABELS } from "../lib/utils";
-import { toggleLike, getLikes } from "../lib/supabase";
+import { toggleLike, getLikes, incrementViews, LikeTargetType } from "../lib/supabase";
 import { ShareModal } from "./ShareModal";
 import { Link } from "./Link";
 import { PropertyActionMenu } from "./PropertyActionMenu";
@@ -69,6 +69,9 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
       ? property.media_urls
       : ["https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&auto=format&fit=crop&q=80"];
 
+  // Track viewed state per session to avoid duplicate increments
+  const viewedRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     getLikes(property.id, "property").then((likes) => {
       setLikesCount(likes.length);
@@ -76,6 +79,13 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
         setIsLiked(likes.some((l) => l.user_id === currentUser.id));
       }
     });
+    
+    // Increment view count once per session
+    const viewKey = `property:${property.id}`;
+    if (!viewedRef.current.has(viewKey)) {
+      viewedRef.current.add(viewKey);
+      incrementViews("properties", property.id);
+    }
   }, [property.id, currentUser]);
 
   const handleToggleLike = async (e: React.MouseEvent) => {
@@ -128,7 +138,7 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
 
   return (
     <>
-      <div className="bg-white rounded-none sm:rounded-2xl border-y sm:border border-slate-200/90 shadow-none sm:shadow-sm flex flex-col mb-4 sm:mb-6 overflow-hidden">
+      <div className="glass-strong rounded-2xl shadow-glass flex flex-col mb-4 sm:mb-6 overflow-hidden">
         {/* Header: Author Info */}
         <div className="p-3 flex items-center justify-between">
           <Link
@@ -323,8 +333,8 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
         </div>
 
         {/* Action Bar */}
-        <div className="px-4 py-3 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-3">
+        <div className="px-4 py-3 flex items-center justify-between border-b border-[var(--color-border-glass)] glass-strong">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={handleToggleLike}
@@ -391,7 +401,7 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
         </div>
 
         {/* Content & Details */}
-        <div className="px-4 py-3 flex-1 flex flex-col space-y-2">
+        <div className="px-4 py-3 flex-1 flex flex-col space-y-2 bg-[var(--color-surface)]/50">
           <div className="flex items-baseline justify-between">
             <div
               className="text-2xl font-black text-slate-900 cursor-pointer hover:text-emerald-600 transition-colors inline-block"

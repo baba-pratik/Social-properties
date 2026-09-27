@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { User as UserIcon, MapPin, Loader2, AlertCircle } from "lucide-react";
 import { useUserStore } from "../store/useUserStore";
 import { Profile } from "../types/database";
-import { supabase } from "../lib/supabase";
+import { getSupabaseClient } from "../lib/supabase";
 
 export const OnboardingModal: React.FC = () => {
   const { sessionUser, setCurrentUser } = useUserStore();
@@ -30,7 +30,9 @@ export const OnboardingModal: React.FC = () => {
         created_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase.from('profiles').upsert(newProfile);
+      const c = getSupabaseClient();
+      if (!c) throw new Error("Supabase not configured");
+      const { error } = await c.from('profiles').upsert(newProfile);
       if (error) throw error;
 
       setCurrentUser(newProfile);

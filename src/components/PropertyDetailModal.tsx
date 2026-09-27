@@ -369,14 +369,17 @@ export const PropertyDetailModal: React.FC<PropertyDetailModalProps> = ({
           {/* Author Card & Direct Action */}
           <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-900 to-teal-950 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-lg">
             <Link href={`/profile/${property.author_id}`} className="flex items-center gap-3.5 w-full sm:w-auto hover:opacity-80 transition-opacity">
-              <img
-                src={
-                  property.author?.avatar_url ||
-                  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"
-                }
-                alt=""
-                className="w-13 h-13 rounded-full object-cover ring-2 ring-emerald-400"
-              />
+              {property.author?.avatar_url ? (
+                <img
+                  src={property.author.avatar_url}
+                  alt=""
+                  className="w-13 h-13 rounded-full object-cover ring-2 ring-emerald-400"
+                />
+              ) : (
+                <div className="w-13 h-13 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-lg">
+                  {property.author?.full_name?.charAt(0) || "U"}
+                </div>
+              )}
               <div>
                 <div className="flex items-center gap-1.5">
                   <span className="font-bold text-base">{property.author?.full_name || "मालिक"}</span>

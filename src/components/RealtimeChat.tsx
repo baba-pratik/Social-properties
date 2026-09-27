@@ -3,7 +3,7 @@ import { Send, MessageSquare, Building, MapPin, Phone, CheckCircle2, Paperclip, 
 import { Conversation, Message, Profile, Property } from "../types/database";
 import { formatPrice, formatRelativeTime, ROLE_LABELS } from "../lib/utils";
 
-import { uploadPropertyMedia, sendMessage, fetchUserConversations, fetchConversationMessages, supabase } from "../lib/supabase";
+import { uploadPropertyMedia, sendMessage, fetchUserConversations, fetchConversationMessages, getSupabaseClient, markMessagesAsRead, getUnreadCounts } from "../lib/supabase";
 import { unstable_batchedUpdates } from "react-dom";
 
 interface RealtimeChatProps {
@@ -27,25 +27,32 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(Boolean(initialConversationId));
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load conversations
+  // Load conversations + subscribe to conversation changes (channel depends only on auth to avoid churn)
   useEffect(() => {
     if (!currentUser) return;
-    
+
+    const refreshUnread = async () => {
+      const counts = await getUnreadCounts(currentUser.id);
+      setUnreadCounts(counts);
+    };
+
     const loadConversations = async () => {
       const list = await fetchUserConversations(currentUser.id);
       unstable_batchedUpdates(() => {
         setConversations(list);
-        if (!activeConversationId && list.length > 0) {
-          setActiveConversationId(list[0].id);
-        }
+        setActiveConversationId((prev) => prev ?? (list.length > 0 ? list[0].id : null));
       });
+      refreshUnread();
     };
-    
+
     loadConversations();
 
-    const convChannel = supabase.channel('conversations')
+    const c = getSupabaseClient();
+    if (!c) return;
+    const convChannel = c.channel('conversations')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, () => {
         loadConversations();
       })
@@ -53,13 +60,13 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
         loadConversations();
       })
       .subscribe();
-      
-    return () => {
-      supabase.removeChannel(convChannel);
-    };
-  }, [currentUser, activeConversationId]);
 
-  // Load messages whenever active conversation changes
+    return () => {
+      c.removeChannel(convChannel);
+    };
+  }, [currentUser]);
+
+  // Load messages whenever active conversation changes; mark incoming messages as read
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -72,11 +79,24 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
         setMessages(list);
       });
       scrollToBottom();
+
+      // Mark incoming (non-own) unread messages as read when the conversation is opened
+      if (currentUser && list.some((m) => m.sender_id !== currentUser.id && !m.is_read)) {
+        await markMessagesAsRead(activeConversationId, currentUser.id);
+        setUnreadCounts((prev) => ({ ...prev, [activeConversationId]: 0 }));
+        unstable_batchedUpdates(() => {
+          setMessages((prev) =>
+            prev.map((m) => (m.sender_id === currentUser.id ? m : { ...m, is_read: true }))
+          );
+        });
+      }
     };
     
     loadMessages();
 
-    const msgChannel = supabase.channel(`messages-${activeConversationId}`)
+    const c = getSupabaseClient();
+    if (!c) return;
+    const msgChannel = c.channel(`messages-${activeConversationId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -91,13 +111,24 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
           });
         });
         scrollToBottom();
+
+        // Viewer is looking at this conversation: mark the incoming message read immediately
+        if (currentUser && newMessage.sender_id !== currentUser.id) {
+          markMessagesAsRead(activeConversationId, currentUser.id);
+          setUnreadCounts((prev) => ({ ...prev, [activeConversationId]: 0 }));
+          unstable_batchedUpdates(() => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === newMessage.id ? { ...m, is_read: true } : m))
+            );
+          });
+        }
       })
       .subscribe();
 
     return () => {
-      supabase.removeChannel(msgChannel);
+      c.removeChannel(msgChannel);
     };
-  }, [activeConversationId]);
+  }, [activeConversationId, currentUser]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -229,20 +260,23 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
                       setActiveConversationId(conv.id);
                       setMobileShowChat(true);
                     }}
-                    className={`p-3.5 flex items-start gap-3 cursor-pointer transition-colors ${
+                    className={`p-3.5 flex items-start gap-3 cursor-pointer transition-colors min-h-[44px] ${
                       isActive
                         ? "bg-emerald-50/80 border-r-4 border-emerald-600"
                         : "hover:bg-slate-100/70"
                     }`}
                   >
-                    <img
-                      src={
-                        partner?.avatar_url ||
-                        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100"
-                      }
-                      alt=""
-                      className="w-11 h-11 rounded-full object-cover shrink-0 ring-1 ring-slate-200"
-                    />
+                    {partner?.avatar_url ? (
+                      <img
+                        src={partner.avatar_url}
+                        alt=""
+                        className="w-11 h-11 rounded-full object-cover shrink-0 ring-1 ring-slate-200"
+                      />
+                    ) : (
+                      <div className="w-11 h-11 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm shrink-0 ring-1 ring-slate-200">
+                        {partner?.full_name?.charAt(0) || "U"}
+                      </div>
+                    )}
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-0.5">
@@ -250,8 +284,15 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
                           {partner?.full_name || "उपयोगकर्ता"}
                           {partner?.is_verified_broker && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
                         </span>
-                        <span className="text-[10px] text-slate-400 shrink-0">
-                          {formatRelativeTime(conv.last_message_at)}
+                        <span className="flex items-center gap-1.5 shrink-0">
+                          {(unreadCounts[conv.id] || 0) > 0 && (
+                            <span className="min-w-[18px] h-[18px] px-1 flex items-center justify-center bg-emerald-600 text-white text-[10px] font-bold rounded-full">
+                              {unreadCounts[conv.id]}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-400">
+                            {formatRelativeTime(conv.last_message_at)}
+                          </span>
                         </span>
                       </div>
 
@@ -274,7 +315,7 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
 
         {/* Right Pane: Active Chat Room */}
         <div
-          className={`flex-1 w-full md:w-2/3 lg:w-auto lg:col-span-1 flex flex-col bg-slate-50 min-w-0 ${
+          className={`flex-1 w-full md:w-2/3 lg:w-auto lg:col-span-1 flex flex-col bg-slate-50 min-w-0 pb-[env(safe-area-inset-bottom)] ${
             mobileShowChat ? "flex" : "hidden md:flex"
           }`}
         >
@@ -290,14 +331,17 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
                     <ArrowLeft className="w-5 h-5" />
                   </button>
 
-                  <img
-                    src={
-                      otherProfile?.avatar_url ||
-                      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100"
-                    }
-                    alt=""
-                    className="w-10 h-10 rounded-full object-cover shrink-0 ring-1 ring-emerald-500"
-                  />
+                  {otherProfile?.avatar_url ? (
+                    <img
+                      src={otherProfile.avatar_url}
+                      alt=""
+                      className="w-10 h-10 rounded-full object-cover shrink-0 ring-1 ring-emerald-500"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm shrink-0 ring-1 ring-emerald-500">
+                      {otherProfile?.full_name?.charAt(0) || "U"}
+                    </div>
+                  )}
 
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -341,7 +385,7 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
               </div>
 
               {/* Messages Thread */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-4">
                 <div className="text-center my-2">
                   <span className="text-[10px] uppercase font-bold text-slate-400 bg-slate-200/60 px-2.5 py-1 rounded-full">
                     सुरक्षित रियल-टाइम हाइपरलोकल चैट
@@ -401,7 +445,7 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
                   e.preventDefault();
                   handleSend();
                 }}
-                className="p-3 bg-white border-t border-slate-200 flex items-center gap-2"
+                className="p-3 bg-white border-t border-slate-200 flex items-center gap-2 pb-[env(safe-area-inset-bottom)]"
               >
                 <label className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer">
                   <ImageIcon className="w-5 h-5" />
@@ -418,13 +462,13 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
                   placeholder="संदेश लिखें (जैसे: क्या आज मुलाकात संभव है?)..."
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  className="flex-1 px-4 py-2.5 text-xs sm:text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-slate-50/50"
+                  className="flex-1 px-4 py-3 text-xs sm:text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-slate-50/50"
                 />
 
                 <button
                   type="submit"
                   disabled={sending || !inputText.trim()}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                  className="min-h-[44px] min-w-[44px] px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                 >
                   <Send className="w-4 h-4" />
                   <span className="hidden sm:inline">भेजें</span>
