@@ -850,30 +850,6 @@ export default function App() {
           ? "h-[calc(100dvh-64px)] md:h-screen overflow-hidden pb-0" 
           : "pb-20 md:pb-0 overflow-x-hidden"
       }`}>
-        {activeTab !== "reels" && (
-          <Header
-            currentCity={currentCity}
-            onCityChange={handleHeaderCityChange}
-            activeTab={activeTab}
-            onTabChange={handleTabChange}
-            currentUser={currentUser}
-            onOpenAuth={() => {
-              if (currentUser) {
-                handleTabChange("profile");
-              } else {
-                setAuthModalOpen(true);
-              }
-            }}
-            onOpenSettings={() => {
-              setIsDrawerOpen(true);
-            }}
-            compact={headerCompact}
-            isSupabaseActive={isSupabaseActive}
-            unreadCount={unreadCount}
-            savedCount={savedProperties.length + savedReels.length}
-          />
-        )}
-
         <div 
           className={`flex flex-col lg:flex-row flex-1 w-full mx-auto pt-0 ${
             activeTab === "reels" ? "md:pt-0" : "md:pt-6"
