@@ -33,27 +33,27 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className={`md:hidden sticky top-0 z-40 bg-[var(--color-glass-surface-strong)]/95 backdrop-blur-md border-b border-[var(--color-border-glass)] shadow-glass ${compact ? 'py-1.5' : 'py-2'}`}>
-      <div className="max-w-full mx-auto px-3 flex items-center justify-between gap-2 min-w-0">
-        {/* Brand - responsive: show only logo + English on very small screens, full on wider */}
+      <div className="max-w-full mx-auto px-3 flex items-center justify-between gap-2 min-w-0 w-full">
+        {/* Left: Brand - flexible, truncates text on narrow screens */}
         <button
           onClick={() => onTabChange("community")}
-          className="flex items-center gap-2 cursor-pointer select-none shrink-0"
+          className="flex items-center gap-1.5 cursor-pointer select-none min-w-0 flex-shrink"
           aria-label="Social Properties - Home"
         >
           <BrandMark size="md" showText={true} />
         </button>
 
-        {/* Location Selector - constrained width, truncates if needed */}
+        {/* Center: Location Selector - flexible width, constrained */}
         <div className="flex-1 min-w-0 flex items-center justify-center px-1">
           <select
             value={currentCity}
             onChange={(e) => onCityChange(e.target.value)}
             className={`
-              w-full max-w-[140px] min-w-[80px]
+              w-full max-w-[130px] min-w-[70px]
               bg-[var(--color-surface)]
               border border-[var(--color-border)]
               text-xs font-semibold text-[var(--color-text-primary)]
-              rounded-full px-2.5 py-1.5
+              rounded-full px-2 py-1.5
               appearance-none
               cursor-pointer
               pr-7
@@ -69,8 +69,8 @@ export const Header: React.FC<HeaderProps> = ({
           </select>
         </div>
 
-        {/* Right Actions - never shrink, always maintain 44x44 touch targets */}
-        <div className="flex items-center gap-1 shrink-0 flex-nowrap">
+        {/* Right: Action Icons - fixed width, never shrink, never wrap */}
+        <div className="flex items-center gap-1 shrink-0 flex-nowrap min-w-0">
           <button
             onClick={() => onTabChange("search")}
             title="खोजें"

@@ -12,10 +12,10 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
   className = "",
 }) => {
   const sizeClasses = {
-    sm: "w-6 h-6",
-    md: "w-8 h-8",
-    lg: "w-10 h-10",
-    xl: "w-12 h-12",
+    sm: "w-5 h-5",
+    md: "w-7 h-7",
+    lg: "w-9 h-9",
+    xl: "w-11 h-11",
     entry: "w-[280px] max-w-[85vw] h-auto",
   };
   const textSizeClasses = {
@@ -27,7 +27,7 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
   };
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex items-center gap-1.5 ${className} min-w-0`}>
       <img
         src="/logo.png"
         alt="Social Properties"
@@ -35,15 +35,14 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
         aria-hidden="true"
       />
       {showText && (
-        <div className="flex flex-col leading-tight min-w-0">
+        <div className="flex flex-col leading-tight min-w-0 overflow-hidden">
           <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]} truncate hidden sm:inline-block`}>
             Social Properties
           </span>
           <span className={`font-semibold text-emerald-700 leading-none ${textSizeClasses[size]} truncate hidden md:inline-block`}>
             सोशल प्रॉपर्टीज
           </span>
-          {/* Fallback for very small screens: show abbreviated version */}
-          <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]} truncate sm:hidden`}>
+          <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]} truncate sm:hidden md:hidden`}>
             Social Properties
           </span>
         </div>
