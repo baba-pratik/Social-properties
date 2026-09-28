@@ -35,12 +35,16 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
         aria-hidden="true"
       />
       {showText && (
-        <div className="flex flex-col leading-tight">
-          <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]}`}>
+        <div className="flex flex-col leading-tight min-w-0">
+          <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]} truncate hidden sm:inline-block`}>
             Social Properties
           </span>
-          <span className={`font-semibold text-emerald-700 leading-none ${textSizeClasses[size]}`}>
+          <span className={`font-semibold text-emerald-700 leading-none ${textSizeClasses[size]} truncate hidden md:inline-block`}>
             सोशल प्रॉपर्टीज
+          </span>
+          {/* Fallback for very small screens: show abbreviated version */}
+          <span className={`font-black tracking-tight text-slate-900 ${textSizeClasses[size]} truncate sm:hidden`}>
+            Social Properties
           </span>
         </div>
       )}
