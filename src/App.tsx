@@ -180,9 +180,8 @@ export default function App() {
 
   }, [setCurrentUser, setSessionUser]);
 
-  const [activeTab, setActiveTab] = useState<"community" | "reels" | "feed" | "messages" | "search" | "profile" | "public-profile">("community");
+  const [activeTab, setActiveTab] = useState<"community" | "reels" | "feed" | "messages" | "search" | "profile" | "public-profile" | "upload">("community");
   const [communitySubTab, setCommunitySubTab] = useState<"property" | "discussion">("discussion");
-  const [currentCity, setCurrentCity] = useState<string>("सभी");
   
   const [properties, setProperties] = useState<Property[]>([]);
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
@@ -307,18 +306,12 @@ export default function App() {
 
   const handleTabChange = (tab: any) => {
     // Tabs that require authentication
-    if (["messages", "profile", "saved"].includes(tab) && !currentUser) {
+    if (["messages", "profile", "saved", "upload"].includes(tab) && !currentUser) {
       setAuthModalOpen(true);
       return;
     }
     setActiveTab(tab);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  // Sync city between Header switcher and filter state
-  const handleHeaderCityChange = (city: string) => {
-    setCurrentCity(city);
-    setFiltersAndSearch({ ...filters, city, locality: "" });
   };
 
   // Load properties and saved items
@@ -818,7 +811,6 @@ export default function App() {
       search_query: "",
       sort_by: "newest",
     });
-    setCurrentCity("all");
     // Reset search pagination & results
     setSearchResults([]);
     setSearchPage(1);
@@ -850,6 +842,25 @@ export default function App() {
           ? "h-[calc(100dvh-64px)] md:h-screen overflow-hidden pb-0" 
           : "pb-20 md:pb-0 overflow-x-hidden"
       }`}>
+{activeTab !== "reels" && (
+          <Header
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+            currentUser={currentUser}
+            onOpenAuth={() => {
+              if (currentUser) {
+                handleTabChange("profile");
+              } else {
+                setAuthModalOpen(true);
+              }
+            }}
+            onOpenSettings={() => {
+              setIsDrawerOpen(true);
+            }}
+            compact={headerCompact}
+            unreadCount={unreadCount}
+          />
+        )}
         <div 
           className={`flex flex-col lg:flex-row flex-1 w-full mx-auto pt-0 ${
             activeTab === "reels" ? "md:pt-0" : "md:pt-6"
@@ -1136,7 +1147,6 @@ export default function App() {
                 });
                 // Ensure the new property is immediately visible by resetting conflicting filters
                 if (filters.city !== "all" && filters.city !== newProp.city) {
-                  setCurrentCity("all");
                   setFilters((prev) => ({ ...prev, city: "all", locality: "", search_query: "", sort_by: "newest" }));
                 } else {
                   setFilters((prev) => ({ ...prev, locality: "", search_query: "", sort_by: "newest" }));
@@ -1299,11 +1309,11 @@ export default function App() {
     </div>
     </div>
 
-    {activeTab !== "upload" && !authModalOpen && !showOnboarding && (
+    {!authModalOpen && !showOnboarding && (
       <BottomNav
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        unreadCount={0}
+        unreadCount={unreadCount}
         currentUser={currentUser}
         onOpenAuth={() => setAuthModalOpen(true)}
       />

@@ -1,5 +1,5 @@
 import React from "react";
-import { Users, Film, MessageCircle, User } from "lucide-react";
+import { Users, Film, MessageCircle, User, Plus } from "lucide-react";
 import { Profile } from "../types/database";
 
 interface BottomNavProps {
@@ -31,6 +31,13 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       badge: 0,
     },
     {
+      id: "upload",
+      label: "",
+      icon: Plus,
+      badge: 0,
+      isUploadAction: true,
+    },
+    {
       id: "messages",
       label: "चैट",
       icon: MessageCircle,
@@ -53,6 +60,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;
+        const isUploadAction = item.isUploadAction;
 
         return (
           <button
@@ -61,21 +69,27 @@ export const BottomNav: React.FC<BottomNavProps> = ({
             type="button"
             onClick={() => onTabChange(item.id)}
             className={`flex flex-col items-center justify-center flex-1 py-1 px-1 transition-all cursor-pointer ${
-              isActive
-                ? "text-[var(--color-primary)] font-bold"
-                : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] font-medium"
+              isUploadAction
+                ? "relative z-10"
+                : ""
+            } ${isActive
+              ? "text-[var(--color-primary)] font-bold"
+              : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] font-medium"
             }`}
             aria-current={isActive ? "page" : undefined}
+            aria-label={isUploadAction ? "पोस्ट बनाएं" : item.label}
           >
             <div className="relative">
               <div
                 className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-200 ${
-                  isActive
+                  isUploadAction
+                    ? "bg-[var(--color-primary)] text-white shadow-glass-lg ring-4 ring-[var(--color-background)]"
+                    : isActive
                     ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
                     : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface)] hover:text-[var(--color-primary)]"
                 }`}
               >
-                <Icon className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : ""}`} />
+                <Icon className={`w-5 h-5 ${isActive && !isUploadAction ? "stroke-[2.5px]" : ""}`} strokeWidth={isUploadAction ? 3 : 2.5} />
               </div>
 
               {item.badge > 0 && (
@@ -85,13 +99,15 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               )}
             </div>
 
-            <span
-              className={`text-[11px] leading-tight tracking-tight mt-1 ${
-                isActive ? "font-bold text-[var(--color-primary)]" : "text-[var(--color-text-tertiary)]"
-              }`}
-            >
-              {item.label}
-            </span>
+            {!isUploadAction && (
+              <span
+                className={`text-[11px] leading-tight tracking-tight mt-1 ${
+                  isActive ? "font-bold text-[var(--color-primary)]" : "text-[var(--color-text-tertiary)]"
+                }`}
+              >
+                {item.label}
+              </span>
+            )}
           </button>
         );
       })}
